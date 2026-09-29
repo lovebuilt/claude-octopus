@@ -22,6 +22,10 @@
   partial result, and report session identity and artifact digest in summary.json.
   run-status.json reports session identity. An opt-in supersede key marks earlier
   matching rounds and preserves that mark when an older round finishes.
+- A probe whose synthesizer fails no longer caches the compact fallback. The
+  stub carries no findings, and caching it served the same empty synthesis to
+  every retry of that prompt for the cache TTL, so re-running Discover after
+  restoring the synthesizer returned nothing new.
 - `orchestrate.sh --dry-run parallel <tasks.json>` no longer reports every task
   as a failed spawn. A dry-run spawn prints the command it would run but no
   provider PID, and parallel execution still waited for one, so each valid task
