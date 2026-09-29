@@ -22,6 +22,15 @@
   partial result, and report session identity and artifact digest in summary.json.
   run-status.json reports session identity. An opt-in supersede key marks earlier
   matching rounds and preserves that mark when an older round finishes.
+- A probe synthesis that fails mechanical evidence verification now gets one
+  repair pass before publication is blocked. The synthesizer that wrote the
+  draft receives the verifier's repairable findings (missing or elided
+  citations, unknown sources, false consensus, number and quote mismatches),
+  the evidence catalog and the numbered draft, and the corrected draft is
+  verified again. Previously one citation-format slip, such as `:42` in place
+  of `src/app.ts:42`, discarded a usable synthesis and failed the probe. A
+  repair returned inside a code fence is unwrapped first, since the verifier
+  skips fenced text.
 - A probe whose synthesizer fails no longer caches the compact fallback. The
   stub carries no findings, and caching it served the same empty synthesis to
   every retry of that prompt for the cache TTL, so re-running Discover after
