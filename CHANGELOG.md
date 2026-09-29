@@ -31,6 +31,10 @@
   of `src/app.ts:42`, discarded a usable synthesis and failed the probe. A
   repair returned inside a code fence is unwrapped first, since the verifier
   skips fenced text.
+- Evidence verification no longer checks an emphasized ordered-list marker,
+  such as `**4.` or `__2.`, as a cited number. Plain `1.` and `2)` markers
+  were already skipped, so a synthesis that bolded its numbered findings
+  failed with a `number_mismatch` for each marker on a line with citations.
 - A probe whose synthesizer fails no longer caches the compact fallback. The
   stub carries no findings, and caching it served the same empty synthesis to
   every retry of that prompt for the cache TTL, so re-running Discover after
