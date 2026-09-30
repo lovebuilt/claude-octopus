@@ -74,4 +74,48 @@ else
     test_fail "DeepSeek V4 Pro pricing is missing or stale"
 fi
 
+test_case "current Sol, Luna, and Sonnet appear with canonical capabilities and prices"
+if [[ "$(get_model_catalog gpt-6.1-sol)" == "1050|yes|yes|yes|codex|standard|active" &&
+      "$(get_model_catalog gpt-6-sol)" == "1050|yes|yes|yes|codex|standard|active" &&
+      "$(get_model_catalog gpt-6-luna)" == "1050|yes|yes|yes|codex|budget|active" &&
+      "$(get_model_catalog claude-sonnet-5-5)" == "1000|yes|yes|yes|claude|standard|active" &&
+      "$(get_model_pricing openai/gpt-6.1-sol:nitro)" == "2.00:10.00" &&
+      "$(get_model_pricing gpt-6-sol)" == "2.00:10.00" &&
+      "$(get_model_pricing gpt-6-luna)" == "0.10:0.50" &&
+      "$(get_model_pricing claude-sonnet-5-5)" == "2.00:10.00" ]]; then
+    test_pass
+else
+    test_fail "current model metadata or namespaced pricing is missing"
+fi
+
+test_case "GPT-6 long-context pricing changes only above 272000 input tokens"
+if PRICING_FILE="$pricing_file" python3 - <<'PY'
+import os, subprocess
+root = os.path.dirname(os.path.dirname(os.environ["PRICING_FILE"]))
+for model, input_rate, output_rate in [("gpt-6.1-sol", 2, 10), ("gpt-6-sol", 2, 10), ("gpt-6-luna", .1, .5)]:
+    for input_tokens in (271999, 272000, 272001):
+        # Exercise the billing function, including canonical namespace handling.
+        command = 'source "$1/scripts/lib/models.sh"; source "$1/scripts/lib/cost.sh"; is_api_based_provider() { return 0; }; estimate_tokens() { printf "%s" "$test_input_tokens"; }; test_input_tokens="$3"; estimate_agent_call_cost codex-api "$2" ignored'
+        actual = float(subprocess.check_output(["bash", "-c", command, "test", root, "openai/" + model + ":floor", str(input_tokens)], text=True))
+        in_multiplier, out_multiplier = (2, 1.5) if input_tokens > 272000 else (1, 1)
+        expected = (input_tokens * input_rate * in_multiplier + input_tokens * 2 * output_rate * out_multiplier) / 1e6
+        assert abs(actual - expected) < .000001, (model, input_tokens, actual, expected)
+PY
+then
+    test_pass
+else
+    test_fail "GPT-6 pricing lost the threshold or whole-request multiplier"
+fi
+
+test_case "routing suffix normalization preserves custom model identities"
+if [[ "$(octo_model_canonical_id floor)" == "floor" &&
+      "$(octo_model_canonical_id :nitro)" == ":nitro" &&
+      "$(octo_model_canonical_id vendor/custom:nitro)" == "vendor/custom:nitro" &&
+      "$(octo_model_canonical_id openai/gpt-6.1-sol:custom)" == "openai/gpt-6.1-sol:custom" &&
+      "$(get_model_policy openai/gpt-6-astra:nitro)" == "explicit|no|0|1|limited" ]]; then
+    test_pass
+else
+    test_fail "routing suffix normalization rewrote a custom ID or bypassed frontier policy"
+fi
+
 test_summary

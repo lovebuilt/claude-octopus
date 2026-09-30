@@ -17,6 +17,45 @@ Fresh configurations adopt the new roster. Existing environment pins, session
 overrides, and `providers.json` settings retain precedence and are not silently
 rewritten.
 
+## Catalog refresh, 2026-09-30
+
+The catalog includes these additional models. This refresh changes available
+choices and cost estimates. The routing defaults in the decision above remain
+the release defaults until the separate default migration is delivered.
+
+| Model ID | API context limit | Standard USD per MTok, input/output |
+|---|---:|---:|
+| `gpt-6.1-sol` | 1,050,000 | $2 / $10 |
+| `gpt-6-sol` | 1,050,000 | $2 / $10 |
+| `gpt-6-luna` | 1,050,000 | $0.10 / $0.50 |
+| `claude-sonnet-5-5` | 1,000,000 | $2 / $10 |
+
+The three OpenAI models apply 2x input and 1.5x output prices to the whole
+request when input exceeds 272,000 tokens. At exactly 272,000, standard prices
+apply. These are API model limits, not a promise of the same effective context
+in Codex. Dispatch also applies the configured transport context ceiling.
+Use the client's model list to confirm account access before pinning a model.
+
+GPT-6.1 Sol accepts `low`, `medium`, `high`, `xhigh`, and `max` reasoning.
+It rejects `none` and `minimal`. Tool calling requires Responses. The
+Chat Completions adapter therefore allows GPT-6.1 Sol only with
+`--tool-policy none`. GPT-6 Sol and GPT-6 Luna can use that adapter's tools
+only with explicit `--reasoning-effort none`; use Codex for reasoning with
+tools. Claude Code added Sonnet 5.5 in v2.1.284. Older clients can keep
+their existing Sonnet pin.
+
+The Chat Completions adapter maps `xhigh` and `max` to `high` for compatibility
+with gateways. Codex can use the reasoning efforts supported by its model list.
+OpenRouter `:nitro` and `:floor` routing suffixes retain the base model's
+capability and standard-price estimates. Actual gateway prices can differ.
+
+Sources checked on 2026-09-30: [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol),
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna),
+[GPT-6 migration rules](https://developers.openai.com/api/docs/guides/latest-model),
+[Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview), and
+[Claude Code release history](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md).
+
 ## Roster
 
 | Model | Default job | Standard price per MTok (input/output) |

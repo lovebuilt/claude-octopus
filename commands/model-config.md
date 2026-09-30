@@ -158,15 +158,23 @@ AskUserQuestion({
     header: "Codex Model",
     multiSelect: false,
     options: [
-      {label: "gpt-5.6-sol", description: "Frontier default — 1M context, 4/20 USD per MTok input/output, best for implementation and independent review"},
-      {label: "gpt-5.6-terra", description: "Balanced — 1M context, 2/12 USD per MTok input/output, strong general-purpose Codex seat"},
-      {label: "gpt-5.6-luna", description: "Budget — 1M context, 0.20/1.20 USD per MTok input/output, best for quick checks and prototypes"},
-      {label: "o3", description: "Reasoning — 200K context, 2/8 USD per MTok input/output, deep analysis & trade-offs"},
+      {label: "gpt-6.1-sol", description: "Current Sol for complex coding, 2/10 USD per MTok input/output; requires model access in your Codex client"},
+      {label: "gpt-6-sol", description: "Previous Sol, 2/10 USD per MTok input/output; preserve an existing pin if preferred"},
+      {label: "gpt-6-luna", description: "Focused tasks and budget checks, 0.10/0.50 USD per MTok input/output"},
+      {label: "gpt-5.6-sol", description: "Current Octopus release default, 4/20 USD per MTok input/output; retained for existing configurations"},
       {label: "Custom", description: "Enter a custom model name"}
     ]
   }]
 })
 ```
+
+These GPT-6 models have a 1,050,000-token API context limit. Codex's effective
+context depends on the client and its configuration. Inputs above 272,000 tokens
+cost 2x input and 1.5x output for the whole request. The catalog also includes
+`claude-sonnet-5-5`, supported by Claude Code v2.1.284 and newer. Listing a model
+does not change a saved default or confirm access for an account. Catalog
+specifications and sources are in `docs/MODEL-ROUTING-STRATEGY.md`.
+`gpt-5.6-terra`, `gpt-5.6-luna`, and `o3` remain available through Custom.
 
 `gpt-6-astra` is intentionally absent from persistent provider defaults. For a
 bounded Premium evaluation after Sol fails a hard acceptance test, configure
