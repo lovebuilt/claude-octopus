@@ -84,10 +84,6 @@
   error, then the first line. Neither fallback picks a line that repeats the
   prompt.
 
-## [11.9.6] - 2026-09-29
-
-### Fixed
-
 - The provider smoke test now checks the `claude` CLI that runs Claude seats.
   Those seats are `claude --print` subprocesses using the CLI's own login, not
   the host session's, and the smoke test only exercised codex, cursor-agent and
@@ -95,8 +91,16 @@
   researcher and the Claude synthesizer then exited 1 after the other
   providers had finished the phase, leaving an empty synthesis. A Claude CLI
   that answers with an error now fails preflight with the login fix; a timeout
-  stays degraded. `OCTOPUS_CLAUDE_SMOKE_TIMEOUT` sets the wait (default 60s),
-  and the check is skipped when `OCTO_ALLOWED_PROVIDERS` excludes Claude.
+  stays degraded, including when Claude is the only provider.
+  `OCTOPUS_CLAUDE_SMOKE_TIMEOUT` sets the wait (default 60s), and the check is
+  skipped when `OCTO_ALLOWED_PROVIDERS` excludes Claude. The smoke-test cache
+  key now records whether Claude is checked, with its binary and model, so a
+  success cached without the Claude check no longer skips it.
+
+## [11.9.6] - 2026-09-29
+
+### Fixed
+
 - Cost examples in commands and skills now use `USD` instead of escaped dollar
   signs. Claude Code no longer treats them as argument placeholders, and Codex,
   Cursor and Factory display the prices without a backslash.
