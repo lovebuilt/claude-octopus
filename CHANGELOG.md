@@ -22,6 +22,13 @@
   partial result, and report session identity and artifact digest in summary.json.
   run-status.json reports session identity. An opt-in supersede key marks earlier
   matching rounds and preserves that mark when an older round finishes.
+- Research evidence verification no longer reads the digits of an identifier
+  as a numeric claim. Ticket and requirement IDs (`PLAT-1181`, `T-1`, `R2`),
+  `#1728`, `§4.2`, `p95` and git SHAs such as `89a941fda` were extracted as
+  numbers, so a line that only named them failed with `missing_citation`, and
+  one that also cited a file failed with `number_mismatch` for SHA fragments
+  such as `34478150`. Standalone numbers, percentages, decimals, numbers with
+  a unit suffix (`15m`, `5xx`) and ranges (`10-13`) are still checked.
 - A probe synthesis that fails mechanical evidence verification now gets one
   repair pass before publication is blocked. The synthesizer that wrote the
   draft receives the verifier's repairable findings (missing or elided
