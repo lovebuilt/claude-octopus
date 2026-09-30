@@ -104,6 +104,17 @@
   seat was then reported as `contract-ineligible`, and every later seat was
   dispatched into the same failure. Spawned and synchronous dispatch now check
   the final output of a failed exit for a terminal quota signature.
+- A failed provider seat now records the provider's own error line as its
+  reason. `codex exec` on a spent ChatGPT plan prints `ERROR: You've hit your
+  usage limit. … try again at 10:25 PM.` and exits 1, but the seat was
+  recorded only as `Exit code 1`. That was all the agent run summary and the
+  synthesis prompt's agent status showed, and the probe listing said
+  `unusable (contract-ineligible)`. Background, synchronous and single-probe
+  dispatch now record the last `ERROR:` line of the provider's stderr, or of
+  its stdout, as `Exit code 1: You've hit your usage limit. …`. Lines that
+  repeat the dispatched prompt are skipped, since codex echoes the prompt to
+  stderr. The probe listing shows a failed seat's recorded reason in place of
+  `contract-ineligible`.
 
 ## [11.9.6] - 2026-09-29
 
