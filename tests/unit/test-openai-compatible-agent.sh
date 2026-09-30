@@ -296,6 +296,82 @@ else
 fi
 
 
+test_case "GPT-6 Chat Completions validates effort and tools before any request"
+if HELPER="$HELPER" python3 - <<'PYTEST'
+import importlib.util, json, os
+spec = importlib.util.spec_from_file_location("chat_model_contract", os.environ["HELPER"])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+seen = []
+class Response:
+    def __enter__(self): return self
+    def __exit__(self, *args): return False
+    def read(self): return b'{"choices":[{"message":{"content":"ok"}}]}'
+def fake_request(req, timeout):
+    seen.append(json.loads(req.data))
+    return Response()
+mod.open_credentialed_request = fake_request
+def call(model, effort, policy):
+    return mod.api_call("https://example.invalid/v1", "key", model, {}, [], reasoning_effort=effort, tool_policy=policy, max_retries=1)
+for model in ("gpt-6-astra", "gpt-6.1-sol"):
+    for transport in (model, "openai/" + model, "openrouter:openai/" + model, "openai/" + model + ":nitro", "openrouter:openai/" + model + ":floor"):
+        for effort, policy in ((None, "auto"), ("high", "auto"), ("none", "none"), ("minimal", "none")):
+            before = len(seen)
+            try: call(transport, effort, policy)
+            except ValueError: pass
+            else: raise AssertionError((transport, effort, policy, "invalid request admitted"))
+            assert len(seen) == before, "validation happened after transport"
+        call(transport, "high", "none")
+        assert "temperature" not in seen[-1] and "tools" not in seen[-1], seen[-1]
+        assert seen[-1]["reasoning_effort"] == "high", seen[-1]
+for model in ("gpt-6-sol", "gpt-6-luna"):
+    for transport in (model, "openai/" + model, "openrouter:openai/" + model, "openai/" + model + ":nitro"):
+        for effort in (None, "high"):
+            before = len(seen)
+            try: call(transport, effort, "auto")
+            except ValueError: pass
+            else: raise AssertionError((transport, effort, "reasoning with tools admitted"))
+            assert len(seen) == before
+        call(transport, "none", "auto")
+        assert seen[-1]["reasoning_effort"] == "none" and seen[-1]["tools"], seen[-1]
+        assert seen[-1]["temperature"] == 0, seen[-1]
+        call(transport, None, "none")
+        assert "temperature" not in seen[-1] and "reasoning_effort" not in seen[-1], seen[-1]
+call("gpt-6.1-sol-preview", None, "auto")
+assert seen[-1]["temperature"] == 0 and seen[-1]["tools"], seen[-1]
+PYTEST
+then
+    test_pass
+else
+    test_fail "GPT-6 request guard allowed unsupported tools, effort, or sampling"
+fi
+
+test_case "GPT-6 required none effort cannot be dropped after gateway rejection"
+if HELPER="$HELPER" python3 - <<'PYTEST'
+import importlib.util, io, os, urllib.error
+spec = importlib.util.spec_from_file_location("required_chat_effort", os.environ["HELPER"])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+seen = []
+def reject(req, timeout):
+    seen.append(req)
+    raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, io.BytesIO(b'{"error":"unsupported parameter reasoning_effort"}'))
+mod.open_credentialed_request = reject
+for model in ("gpt-6-sol", "openai/gpt-6-luna:nitro"):
+    before = len(seen)
+    try:
+        mod.api_call("https://example.invalid/v1", "key", model, {}, [], reasoning_effort="none", tool_policy="auto")
+    except RuntimeError as error:
+        assert "gateway rejected required reasoning_effort=none" in str(error), error
+    else: raise AssertionError("required reasoning effort was dropped")
+    assert len(seen) == before + 1, "invalid retry reached the gateway"
+PYTEST
+then
+    test_pass
+else
+    test_fail "gateway rejection dropped required none effort or hid the cause"
+fi
+
 test_case "openai-compatible-agent main treats unset and zero as provider default"
 if HELPER="$HELPER" python3 - <<'PYTEST'
 import importlib.util, os, pathlib, sys, tempfile
