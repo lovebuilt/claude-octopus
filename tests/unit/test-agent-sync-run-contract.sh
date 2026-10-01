@@ -146,6 +146,19 @@ get_agent_command() {
 }
 build_provider_env() { PROVIDER_ENV_ARRAY=(); }
 run_with_timeout() { printf '%s\n' "$1" > "$FIXTURE_ROOT/timeout-seconds"; shift; "$@"; }
+date() {
+    # These fixtures check override precedence, not elapsed preparation time.
+    # Freeze their epoch so crossing a real second cannot reduce 60 to 59.
+    case "${FIXTURE_SCENARIO:-}" in
+        council-global-budget|council-default-budget)
+            if [[ "${1:-}" == "+%s" ]]; then
+                printf '1800000000\n'
+                return 0
+            fi
+            ;;
+    esac
+    command date "$@"
+}
 stop_quota_watcher() { :; }
 update_agent_status() { :; }
 octo_estimate_tokens_for_file() { printf '%s\n' 0; }

@@ -31,7 +31,11 @@ source "$PROJECT_ROOT/scripts/lib/provider-allowlist.sh"
 source "$PROJECT_ROOT/scripts/lib/smoke.sh"
 
 secure_tempfile() { mktemp "$TEST_TMP_DIR/${1:-tmp}.XXXXXX"; }
-run_with_timeout() { shift; "$@"; }
+run_with_timeout() {
+    printf '%s|%s\n' "$1" "$2" >> "$TEST_TMP_DIR/timeout-calls"
+    shift
+    "$@"
+}
 cache_status() { sed -n '3p' "$SMOKE_TEST_CACHE_FILE" 2>/dev/null; }
 get_agent_model() { echo "claude-test"; }
 get_agent_command() {
@@ -94,7 +98,16 @@ else
 fi
 
 write_fake_claude 'echo ok'
+OCTOPUS_CLAUDE_SMOKE_TIMEOUT=7
 run_smoke
+unset OCTOPUS_CLAUDE_SMOKE_TIMEOUT
+
+test_case "the configured Claude smoke timeout reaches its provider subprocess"
+if grep -Fxq "7|$FAKE_BIN_DIR/claude" "$TEST_TMP_DIR/timeout-calls"; then
+    test_pass
+else
+    test_fail "the configured timeout did not reach Claude"
+fi
 
 test_case "an authenticated Claude CLI passes alongside codex"
 if [[ "$smoke_status" -eq 0 ]] && [[ -s "$CLAUDE_CALLS" ]] && [[ "$(cache_status)" == "0" ]]; then

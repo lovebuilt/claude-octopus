@@ -4,7 +4,13 @@
 # Graphify is not an Octopus provider. These helpers detect an existing local
 # knowledge graph and pass a compact orientation packet into escalated workflows.
 
-_octo_graphify_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+_octo_graphify_source="${BASH_SOURCE[0]:-}"
+if [[ -z "$_octo_graphify_source" && -n "${ZSH_VERSION:-}" ]]; then
+    # zsh reports the sourced file through %x rather than BASH_SOURCE.
+    eval '_octo_graphify_source=${(%):-%x}'
+fi
+_octo_graphify_lib_dir="$(cd "$(dirname "$_octo_graphify_source")" && pwd -P)"
+unset _octo_graphify_source
 
 octo_graphify_enabled() {
     case "${OCTOPUS_GRAPHIFY:-1}" in
@@ -226,5 +232,5 @@ octo_graphify_context_for_prompt() {
     available=$((max_chars - ${#header} - 2 * ${#fence} - 12))
     [[ "$available" -ge 0 ]] || return 0
     printf '%s\n%smarkdown\n%s\n%s\n' "$header" "$fence" \
-        "${excerpt:0:available}" "$fence"
+        "${excerpt:0:$available}" "$fence"
 }
