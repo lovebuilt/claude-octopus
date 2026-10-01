@@ -1559,15 +1559,33 @@ tangle_scopes_overlap() {
 }
 
 tangle_scope_authorizes_path() {
-    local scope="${1%/}" path="$2" repo_root
+    local scope="${1%/}" path="$2" baseline_head="${3:-}" before_file="${4:-}"
+    local repo_root baseline_type before_rc
     [[ -n "$scope" && -n "$path" ]] || return 1
     [[ "$scope" == "$path" ]] && return 0
     # Collision checks may fold case and compare in both directions. Write
     # authority keeps exact spelling and only descends into declared directories.
     [[ "$path" == "$scope"/* ]] || return 1
+    if [[ -n "$before_file" ]]; then
+        [[ -f "$before_file" ]] || return 1
+        # Snapshot entries are files, symlinks and gitlinks, never directories.
+        if grep -Fxc -- "$scope" "$before_file" >/dev/null 2>&1; then
+            return 1
+        else
+            before_rc=$?
+            [[ "$before_rc" -eq 1 ]] || return 1
+        fi
+    fi
     repo_root=$(tangle_resolve_repo_root 2>/dev/null) || return 1
-    [[ -f "$repo_root/$scope" ]] && return 1
-    tangle_scope_is_directory "$1"
+    [[ -n "$baseline_head" ]] || baseline_head=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) || return 1
+    baseline_type=$(git -C "$repo_root" cat-file -t "$baseline_head:$scope" 2>/dev/null || true)
+    case "$baseline_type" in
+        tree) return 0 ;;
+        blob|commit) return 1 ;;
+    esac
+    # A new directory must be declared as such before workers run. Retain the
+    # legacy extensionless directory convention without consulting their edits.
+    [[ "$1" == */ || "${scope##*/}" != *.* ]]
 }
 
 tangle_resolve_repo_root() {
@@ -5263,7 +5281,7 @@ tangle_changed_paths_outside_write_scopes() {
         matched=false
         while IFS= read -r scope; do
             [[ -n "$scope" ]] || continue
-            if tangle_scope_authorizes_path "$scope" "$path"; then matched=true; break; fi
+            if tangle_scope_authorizes_path "$scope" "$path" "$baseline_head" "$worktree_before_file"; then matched=true; break; fi
         done <<< "$authorized_scopes"
         [[ "$matched" == true ]] || printf '%s\n' "$path"
     done <<< "$changed_paths" | sed '/^$/d' | sort -u
