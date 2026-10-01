@@ -55,6 +55,15 @@
   stub carries no findings, and caching it served the same empty synthesis to
   every retry of that prompt for the cache TTL, so re-running Discover after
   restoring the synthesizer returned nothing new.
+- Review result parsing skips the exact dispatched prompt and reads the
+  launcher's Output section. Headings echoed in a stderr transcript no longer
+  replace real findings. An answered seat without findings JSON reports
+  incomplete coverage instead of a successful review.
+- Review debate requires a reason and code or contract evidence before it
+  excludes a contested finding. Unsupported decisions retain the finding.
+  The final artifact, reports, and debate audit keep excluded findings with
+  their original identity, decision, reason, and evidence.
+
 - `orchestrate.sh --dry-run parallel <tasks.json>` no longer reports every task
   as a failed spawn. A dry-run spawn prints the command it would run but no
   provider PID, and parallel execution still waited for one, so each valid task

@@ -1235,6 +1235,13 @@ ${heuristic_ctx}"
         fi
         echo "# Started: $(date)" >> "$result_file"
         echo "" >> "$result_file"
+        local _untrusted_nonce=""
+        case "$agent_type" in codex*|gemini*|perplexity*|cursor-agent*|kimi*)
+            _untrusted_nonce=$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' 2>/dev/null) \
+                || _untrusted_nonce="${RANDOM}${RANDOM}${RANDOM}$(date +%s)"
+            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
+            ;;
+        esac
         echo "## Output" >> "$result_file"
         echo '```' >> "$result_file"
 
@@ -1472,17 +1479,9 @@ ${heuristic_ctx}"
                     sed -i.bak '1s/^/<!-- trust=untrusted provider='"$agent_type"' -->\n/' "$result_file" 2>/dev/null || true
                     rm -f "${result_file}.bak"
                 fi
-                # Close the fenced block, then append an END marker (BEGIN goes below)
+                # Close the Output fence and its launcher-written nonce boundary.
                 echo '```' >> "$result_file"
-                local _untrusted_nonce
-                _untrusted_nonce=$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' 2>/dev/null) \
-                    || _untrusted_nonce="${RANDOM}${RANDOM}${RANDOM}$(date +%s)"
                 echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
-                # Insert the BEGIN marker just above the "## Output" header
-                awk -v marker="<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" '
-                    /^## Output$/ && !done { print marker; done=1 }
-                    { print }
-                ' "$result_file" > "${result_file}.nonce" && mv "${result_file}.nonce" "$result_file"
                 ;;
             *)
                 echo '```' >> "$result_file"
@@ -1582,6 +1581,9 @@ ${heuristic_ctx}"
                 echo "(no output captured before stall detection)" >> "$result_file"
             fi
             echo '```' >> "$result_file"
+            if [[ -n "$_untrusted_nonce" ]]; then
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
+            fi
             echo "" >> "$result_file"
             echo "## Status: STALLED - PARTIAL RESULTS (exit code: 76)" >> "$result_file"
             echo "" >> "$result_file"
@@ -1632,6 +1634,9 @@ ${heuristic_ctx}"
                 echo "(no output captured before timeout)" >> "$result_file"
             fi
             echo '```' >> "$result_file"
+            if [[ -n "$_untrusted_nonce" ]]; then
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
+            fi
             echo "" >> "$result_file"
             echo "## Status: TIMEOUT - PARTIAL RESULTS (exit code: $exit_code)" >> "$result_file"
             echo "" >> "$result_file"
@@ -1702,6 +1707,9 @@ ${heuristic_ctx}"
                 echo "(no output captured — ${agent_type} produced no stdout; check provider auth/config with 'orchestrate.sh doctor')" >> "$result_file"
             fi
             echo '```' >> "$result_file"
+            if [[ -n "$_untrusted_nonce" ]]; then
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
+            fi
             echo "" >> "$result_file"
             echo "## Status: FAILED (exit code: $exit_code)" >> "$result_file"
 

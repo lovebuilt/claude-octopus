@@ -38,6 +38,20 @@ The report uses the same static readiness contract as setup and Doctor. It
 does not send prompts or make provider requests. A provider can be installed
 but `degraded` when authentication is missing or cannot be confirmed safely.
 
+## Check dispatched Claude seats
+
+Workflow preflight can run a provider smoke test. It sends a trivial prompt
+through the same `claude --print` command used by Claude seats, with the selected
+binary and model. This checks the subprocess login separately from the host
+session. `OCTOPUS_CLAUDE_SMOKE_TIMEOUT` sets the wait, with a default of 60 seconds.
+An authentication error fails preflight with login guidance. A timeout reports
+degraded readiness and lets the workflow continue, including for a Claude-only
+fleet. Excluding Claude with `OCTO_ALLOWED_PROVIDERS` skips its smoke check.
+
+The smoke cache includes whether Claude is checked, its binary, and its model.
+Changing any of these requires a new check. Static Doctor and capability reports
+remain local-only; they do not run this prompt.
+
 ## Check cached installations
 
 ```bash

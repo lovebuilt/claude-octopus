@@ -120,6 +120,7 @@ cat > "$codex_quota_file" <<'EOF'
 # Role: implementation-logic-reviewer
 # Phase: review
 # Prompt-Format: octopus-length-v1
+# Prompt-Bytes: 327
 You are running as a non-interactive subagent dispatched by Claude Octopus via codex exec.
 
 If required review is unavailable or denied, report incomplete coverage without
@@ -170,6 +171,7 @@ codex_crash_file="$TEST_TMP_DIR/codex-crash-failed.md"
 cat > "$codex_crash_file" <<'EOF'
 # Agent: codex-standard
 # Prompt-Format: octopus-length-v1
+# Prompt-Bytes: 211
 You are a code reviewer. Review the following diff.
 If required review is unavailable or denied, report incomplete coverage without
 claiming completion.

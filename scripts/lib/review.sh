@@ -3,6 +3,7 @@ _agent_spec_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_agent_spec_lib_dir}/agent-spec.sh" 2>/dev/null || true
 source "${_agent_spec_lib_dir}/provider-allowlist.sh" 2>/dev/null || true
 source "${_agent_spec_lib_dir}/pid-ledger.sh" 2>/dev/null || true
+source "${_agent_spec_lib_dir}/result-file.sh"
 # Claude Octopus — Code Review Pipeline
 # Extracted from orchestrate.sh
 # Source-safe: no main execution block.
@@ -690,22 +691,19 @@ review_result_completed_successfully() {
     [[ "$final_status" == "SUCCESS" ]]
 }
 
-# Return the most specific provider failure. The last "ERROR:" line wins, the
-# Error Log's before the Output's; for codex's "ERROR: {" JSON body it is the
-# body's message. Otherwise prefer real Output, then the Error Log when the
-# provider produced no stdout, reporting the last line that reads as an error,
-# else the first line. Only the result writer's own headers end a section:
-# provider output is copied verbatim, and a codex transcript echoes the whole
-# prompt, Markdown headings included, before its closing ERROR line. Those two
-# fallbacks skip lines that repeat the prompt the writer stored above the first
-# "## Output", and a later "## Output" discards anything collected from an
-# echoed or forged prompt above it. Keep the status-file delimiter out of the
-# detail and cap pathological output, while retaining enough text for an
-# actionable CI comment (#893).
+# Prefer the last stderr ERROR line, then stdout ERROR, then the existing
+# heuristic and first-line fallbacks. Framed files use launcher-owned sections;
+# legacy files keep last-wins selection. Skip echoed prompt lines in heuristic
+# fallbacks, replace status delimiters, and cap the reported detail at 240 chars.
 review_result_failure_detail() {
     local result_file="$1"
     [[ -f "$result_file" ]] || return 1
-    awk '
+    local framed_sections framed_rc=0
+    framed_sections=$(octo_result_framed_sections "$result_file" failure) || framed_rc=$?
+    [[ "$framed_rc" -eq 0 || "$framed_rc" -eq 2 ]] || return 1
+    {
+        if [[ "$framed_rc" -eq 0 ]]; then printf '%s\n' "$framed_sections"; else cat "$result_file"; fi
+    } | awk '
         function clean(line) {
             gsub(/\|/, "/", line)
             gsub(/\033\[[0-9;]*[[:alpha:]]/, "", line)
@@ -717,7 +715,12 @@ review_result_failure_detail() {
             first_line[name]=""
         }
         /^## Output$/ { seen_output=1; reset("output"); reset("error"); placeholder=""; section="output"; in_json=0; next }
-        !seen_output { prompt_line[$0]=1; next }
+        !seen_output {
+            prompt=$0
+            sub(/^# Dispatched-Prompt-Line: /, "", prompt)
+            prompt_line[prompt]=1
+            next
+        }
         /^## Error Log$/ { reset("error"); section="error"; in_json=0; next }
         /^## (Status|Contract Status):/ || /^## (Errors|Warnings\/Errors|Native Metrics|Runtime Identity)$/ || /^## Raw Output/ {
             section=""
@@ -762,7 +765,7 @@ review_result_failure_detail() {
             else if (first_line["error"] != "") print first_line["error"]
             else if (placeholder != "") print placeholder
         }
-    ' "$result_file" 2>/dev/null
+    ' 2>/dev/null
 }
 
 review_provider_key_from_agent_type() {
@@ -951,20 +954,19 @@ review_supervise_round1() {
     for _pid in "${round1_pids[@]}"; do wait "$_pid" 2>/dev/null || true; done
 }
 
-# review_extract_output_text: print only the content of the LAST "## Output"
-# section in the file, ending wherever that section ends — the next "## "
-# header of any kind, or EOF. "## Output" always restarts the capture, so an
-# earlier (e.g. attacker-forged, echoed-prompt) "## Output" section is
-# discarded the moment a later, genuine one is seen (#1004).
+# Current files select the first launcher Output after the prompt byte frame.
+# Legacy files keep the last-wins parser for prompt-heading compatibility.
 review_extract_output_text() {
-    local review_md="$1"
+    local review_md="$1" framed_rc=0
     [[ -f "$review_md" ]] || return 1
-    awk '''
+    octo_result_framed_sections "$review_md" output && return 0 || framed_rc=$?
+    [[ "$framed_rc" -eq 2 ]] || return 1
+    awk '
         /^## Output$/ { in_output=1; candidate=""; next }
         /^## / { if (in_output) selected=candidate; in_output=0; next }
         in_output && !/^```(json|JSON)?$/ { candidate = candidate (candidate == "" ? "" : "\n") $0 }
         END { if (in_output) selected = candidate; if (selected != "") print selected }
-    ''' "$review_md" 2>/dev/null
+    ' "$review_md" 2>/dev/null
 }
 
 review_output_has_finding_signal() {
@@ -977,7 +979,7 @@ review_extract_findings_text() {
     local output_text="$1"
     local direct_json
     [[ -n "$output_text" ]] || { echo "[]"; return 1; }
-    direct_json=$(printf '%s' "$output_text" | jq -cs '[.[] | objects | .findings | select(type == "array" and length > 0)] | last // []' 2>/dev/null || true)
+    direct_json=$(printf '%s' "$output_text" | jq -cse '[.[] | objects | .findings | select(type == "array")] | if length == 0 then error("no findings array") else ([.[] | select(length > 0)] | last) // last end' 2>/dev/null || true)
     if [[ -n "$direct_json" && "$direct_json" != "null" ]]; then
         printf '%s\n' "$direct_json"
         return 0
@@ -1069,7 +1071,13 @@ review_resolve_round1_findings() {
     local recovered_findings=""
 
     REVIEW_RESOLVED_AGENT_FINDINGS="$agent_findings"
-    if [[ "$agent_findings" != "[]" ]] || ! review_output_has_finding_signal "$provider_output_text"; then
+    if [[ "$agent_findings" != "[]" ]]; then return 0; fi
+    if review_extract_findings_text "$provider_output_text" >/dev/null 2>&1; then return 0; fi
+    if ! review_output_has_finding_signal "$provider_output_text"; then
+        if review_result_completed_successfully "$result_file"; then
+            log WARN "review_run: no findings JSON parsed in $(basename "$result_file"); review coverage is incomplete"
+            return 1
+        fi
         return 0
     fi
 
@@ -1133,6 +1141,39 @@ review_findings_count() {
         else error("invalid findings document")
         end
     ' 2>/dev/null
+}
+
+# Input is the candidate array followed by one parsed debate response. Duplicate,
+# unknown, missing, or unsupported decisions cannot suppress a finding.
+review_resolve_debate_decisions() {
+    jq -cs '
+        .[0] as $candidates | .[1] as $response |
+        def nonblank: type == "string" and test("[^[:space:]]");
+        [$candidates[] as $finding |
+            (if ($response.decisions | type) == "array"
+             then [$response.decisions[] | objects | select(.debate_id == $finding.debate_id)]
+             else [] end) as $matches |
+            if ($matches | length) == 1
+               and ($matches[0].decision == "include" or $matches[0].decision == "exclude")
+               and ($matches[0].reason | nonblank)
+               and ($matches[0].evidence | nonblank)
+            then {debate_id:$finding.debate_id,decision:$matches[0].decision,
+                  reason:$matches[0].reason,evidence:$matches[0].evidence,finding:$finding}
+            else {debate_id:$finding.debate_id,decision:"retain",
+                  reason:"No unique supported decision with a reason and evidence",evidence:"",finding:$finding}
+            end]
+    '
+}
+
+# Exclusions remain visible even when synthesis has no ranked findings.
+review_render_debate_exclusions() {
+    local findings_json="$1"
+    printf '%s' "$findings_json" | jq -r '
+        if (.excluded // [] | length) > 0 then
+            "Excluded by debate, retained for audit:",
+            (.excluded[] | "- \(.debate_id): \(.title // .message) at \(.file):\(.line)\n  Reason: \(.debate_reason)\n  Evidence: \(.debate_evidence)"), ""
+        else empty end
+    '
 }
 
 review_local_synthesis_json() {
@@ -2120,9 +2161,11 @@ ${round1_prompts[$retry_idx]}"
         fi
         local provider_output_text
         provider_output_text=$(review_extract_output_text "$f" 2>/dev/null || true)
+        local seat_parse_ok=true
         if ! review_resolve_round1_findings \
             "$atype" "${round1_roles[$idx]}" "$f" "$agent_findings" "$provider_output_text"; then
             ((round1_parse_miss_count++)) || true
+            seat_parse_ok=false
         fi
         agent_findings="$REVIEW_RESOLVED_AGENT_FINDINGS"
         all_findings=$(printf '%s\n%s' "$all_findings" "$agent_findings" |             jq -s 'add' 2>/dev/null || echo "$all_findings")
@@ -2143,6 +2186,8 @@ ${round1_prompts[$retry_idx]}"
             failure_detail="$(review_result_failure_detail "$f" 2>/dev/null || true)"
             failure_detail="${failure_detail:-Round 1 agent did not complete successfully}"
             review_append_provider_status "$provider_status_file" "$atype" "${round1_roles[$idx]}" fallback "$failure_detail"
+        elif [[ "$seat_parse_ok" != true ]]; then
+            review_append_provider_status "$provider_status_file" "$atype" "${round1_roles[$idx]}" fallback "Round 1 answered, but no findings JSON parsed"
         else
             review_append_provider_status "$provider_status_file" "$atype" "${round1_roles[$idx]}" ok "Round 1 completed"
         fi
@@ -2255,6 +2300,9 @@ Return ONLY valid JSON with 'findings' array including verdict field."
         echo "$all_findings")
 
     # ── Debate gate (if enabled) ──────────────────────────────────────────────
+    # Keep every contested finding unless one complete, evidence-backed decision
+    # excludes it. Persist the original finding and decision before synthesis.
+    local debate_audit="[]" debate_excluded="[]" debate_provider=""
     if [[ "$debate" != "off" ]]; then
         local debate_candidates
         debate_candidates=$(echo "$confirmed_findings" | \
@@ -2266,29 +2314,54 @@ Return ONLY valid JSON with 'findings' array including verdict field."
         fi
         if [[ "$debate_count" -gt 0 ]]; then
             log INFO "review_run: debating $debate_count contested findings"
-            local debate_prompt="Challenge these $debate_count contested code review findings. For each, state whether it is a real bug (include) or false positive (exclude). Be adversarial.
+            local debate_prompt="Evaluate these $debate_count contested code review findings. Check the code and supplied diff before deciding. Consider evidence for and against each finding. Exclude only a demonstrated false positive; keep uncertain findings.
+${review_contract_context}
 Findings: $(echo "$debate_candidates" | jq -c '.')
-Return JSON: {\"include\": [...debate_id values...], \"exclude\": [...debate_id values...]}. Use only the debate_id values shown above, never finding titles."
-            local debate_result debate_provider
+
+Diff:
+${diff_content}
+
+Return ONLY JSON: {\"decisions\":[{\"debate_id\":\"finding-0\",\"decision\":\"include|exclude\",\"reason\":\"specific explanation\",\"evidence\":\"file:line and supporting code or contract\"}]}. Use only the debate_id values shown above. Give a nonempty reason and code or contract evidence for every decision."
+            local debate_result debate_answered=true
             debate_provider="$(review_phase_provider "codex" "implementation-debater")" || return 1
-            debate_result=$(review_run_agent_sync_progress "$debate_provider" "$debate_prompt" "implementation-debater" "review" "debate-$(octo_agent_spec_slug "$debate_provider")") && {
-                review_append_provider_status "$provider_status_file" "$debate_provider" implementation-debater ok "Round 3 debate"
-            } || {
+            debate_result=$(review_run_agent_sync_progress "$debate_provider" "$debate_prompt" "implementation-debater" "review" "debate-$(octo_agent_spec_slug "$debate_provider")") || {
+                debate_answered=false
                 log WARN "review_run: ${debate_provider} debate agent failed, including all contested findings"
-                log "USER" "⚠ Round 3: ${debate_provider} debate gate unavailable — including all contested findings without debate."
-                review_append_provider_status "$provider_status_file" "$debate_provider" implementation-debater fallback "Round 3 debate → skipped"
-                debate_result="{\"include\":[],\"exclude\":[]}"
+                review_append_provider_status "$provider_status_file" "$debate_provider" implementation-debater fallback "Round 3 debate unavailable; findings retained"
+                debate_result="{}"
             }
-            # v9.3.1: Strip markdown fences from debate result (#188)
             debate_result=$(echo "$debate_result" | review_strip_external_cli_wrapper | sed '/^```json$/d; /^```JSON$/d; /^```$/d')
-            local exclude_ids
-            exclude_ids=$(echo "$debate_result" | jq -c '(.exclude // []) | map(select(type == "string"))' 2>/dev/null || echo "[]")
-            if [[ "$exclude_ids" != "[]" ]]; then
-                confirmed_findings=$(echo "$confirmed_findings" | \
-                    jq --argjson excluded "$exclude_ids" \
-                        '[to_entries[] | ("finding-" + (.key | tostring)) as $id | select(.value.verdict != "needs-debate" or ($excluded | index($id)) == null) | .value]' \
-                        2>/dev/null || echo "$confirmed_findings")
+            local debate_document
+            debate_document=$(printf '%s' "$debate_result" | jq -cse 'if length == 1 and (.[0] | type == "object") then .[0] else error("invalid decision document") end' 2>/dev/null) || debate_document='{}'
+            debate_audit=$(printf '%s\n%s\n' "$debate_candidates" "$debate_document" | review_resolve_debate_decisions)
+            if [[ "$debate_answered" == true ]]; then
+                if printf '%s' "$debate_audit" | jq -e 'any(.[]; .decision == "retain")' >/dev/null; then
+                    review_append_provider_status "$provider_status_file" "$debate_provider" implementation-debater fallback "Round 3 unsupported decisions; findings retained"
+                else
+                    review_append_provider_status "$provider_status_file" "$debate_provider" implementation-debater ok "Round 3 evidence-backed debate"
+                fi
             fi
+            local decision_record decision_id decision_value decision_reason
+            while IFS= read -r decision_record; do
+                decision_id=$(printf '%s' "$decision_record" | jq -r '.debate_id')
+                decision_value=$(printf '%s' "$decision_record" | jq -r '.decision')
+                decision_reason=$(printf '%s' "$decision_record" | jq -r '.reason')
+                if [[ "$decision_value" == retain ]]; then
+                    log WARN "review_run: debate ${decision_id} retained: ${decision_reason}"
+                else
+                    log INFO "review_run: debate ${decision_id} ${decision_value}: ${decision_reason}"
+                fi
+                if declare -f octo_event_emit >/dev/null 2>&1; then
+                    octo_event_emit "review.debate" provider="$(review_provider_key_from_agent_type "$debate_provider")" debate_id="$decision_id" decision="$decision_value" reason="$decision_reason" evidence="$(printf '%s' "$decision_record" | jq -r '.evidence')" finding="$(printf '%s' "$decision_record" | jq -c '.finding')" || true
+                fi
+            done < <(printf '%s' "$debate_audit" | jq -c '.[]')
+            local debate_audit_file="${results_dir}/review-debate-${timestamp}.json"
+            printf '%s' "$debate_audit" | jq --arg provider "$debate_provider" '{provider:$provider,decisions:.}' > "$debate_audit_file"
+            if [[ -n "$proof_dir" ]]; then
+                octo_proof_artifact "$proof_dir" "review-debate" "$debate_audit_file" "debate decisions with original findings and evidence"
+            fi
+            debate_excluded=$(printf '%s' "$debate_audit" | jq -c '[.[] | select(.decision == "exclude") | .finding + {verdict:"excluded-by-debate",debate_id:.debate_id,debate_reason:.reason,debate_evidence:.evidence}]')
+            confirmed_findings=$(printf '%s\n%s\n' "$confirmed_findings" "$debate_audit" | jq -sc '.[0] as $findings | [.[1][] | select(.decision == "exclude") | .debate_id] as $excluded | [$findings | to_entries[] | ("finding-" + (.key | tostring)) as $id | select(.value.verdict != "needs-debate" or ($excluded | index($id)) == null) | .value]')
         fi
     fi
 
@@ -2332,6 +2405,10 @@ Return ONLY JSON: {\"findings\": [...ranked, deduplicated findings...]}"
             final_json=$(review_local_synthesis_json "$confirmed_findings" "$round1_warning")
             synth_ok="false"
         fi
+    fi
+
+    if [[ "$debate_audit" != "[]" ]]; then
+        final_json=$(printf '%s\n%s\n%s\n' "$final_json" "$debate_audit" "$debate_excluded" | jq -sc --arg provider "$debate_provider" '.[0] + {debate:{provider:$provider,decisions:.[1]},excluded:.[2]}')
     fi
 
     # Write findings file
@@ -2608,6 +2685,7 @@ render_terminal_report() {
     fi
 
     review_emit_finding_events "$findings_file" || true
+    review_render_debate_exclusions "$findings_json"
 
     if [[ "$finding_count" -eq 0 ]]; then
         # v9.20.1: Distinguish "clean review" from "all providers failed" (#255)
@@ -2673,6 +2751,7 @@ render_review_summary() {
     echo "| Nit | $nit_count |"
     echo "| Pre-existing | $preexisting_count |"
     echo ""
+    review_render_debate_exclusions "$findings_json"
     echo "_Reviewed by Codex + Antigravity + Claude + Perplexity fleet_"
     echo "_See inline comments for details_"
 }

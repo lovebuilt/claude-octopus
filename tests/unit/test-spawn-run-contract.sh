@@ -279,7 +279,9 @@ enforce_context_budget() {
         printf '%s' "$1" > "$CAPTURED_BUDGET_INPUT_FILE"
     fi
     if [[ "${FAKE_COMPRESS_PROMPT:-false}" == true ]]; then
-        if [[ "${FAKE_PROMPT_MARKER:-false}" == true ]]; then
+        if [[ "${FAKE_PROMPT_OUTPUT:-false}" == true ]]; then
+            printf 'D\n## Output\n%s\n' "$4"
+        elif [[ "${FAKE_PROMPT_MARKER:-false}" == true ]]; then
             printf 'D\n# Started: x\n%s\n' "$4"
         else
             printf 'DISPATCHED role=%s phase=%s\n' "$2" "$4"
@@ -699,6 +701,22 @@ if [[ "$prompt_equal" == true && "$expected_equal" == true && "$byte_count_equal
     test_pass
 else
     test_fail "prompt frame mismatch (provider=$prompt_equal expected=$expected_equal bytes=$byte_count_equal metadata=$metadata_equal redaction=$original_absent)"
+fi
+
+test_case "spawn writes the nonce beside launcher Output without changing prompt bytes"
+export FAKE_COMPRESS_PROMPT=true FAKE_PROMPT_OUTPUT=true
+run_external_fixture success nonce-frame kimi-research reviewer review
+unset FAKE_COMPRESS_PROMPT FAKE_PROMPT_OUTPUT
+nonce_result="$RESULTS_DIR/kimi-research-nonce-frame.md"
+nonce_frame="$(awk '/^# Prompt-Format: octopus-length-v1$/ { n=NR; getline; print n ":" $3; exit }' "$nonce_result")"
+nonce_prompt="$(tail -n "+$((${nonce_frame%%:*} + 2))" "$nonce_result" | dd bs=1 count="${nonce_frame#*:}" 2>/dev/null)"
+nonce_output="$(octo_result_framed_sections "$nonce_result" output)"
+if [[ "$nonce_prompt" == $'D\n## Output\nreview' ]] &&
+   [[ "$nonce_output" == 'Substantive external provider result.' ]] &&
+   [[ "$(grep -c '^<!-- BEGIN-UNTRUSTED:' "$nonce_result")" -eq 1 ]]; then
+    test_pass
+else
+    test_fail "nonce changed prompt frame or selected prompt Output (prompt=$nonce_prompt output=$nonce_output)"
 fi
 
 test_case "exact background seat records canonical provider and literal model"
