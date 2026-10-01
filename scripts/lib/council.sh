@@ -253,10 +253,46 @@ council_resolve_corpus_mode() {
     return 0
 }
 
+council_research_path_is_safe() {
+    local file="$1"
+    local base="$2"
+    local parent canonical_base canonical_parent relative component current
+
+    [[ -f "$file" && ! -L "$file" && -d "$base" && ! -L "$base" ]] || return 1
+    case "$file" in
+        "$base"/*) ;;
+        *) return 1 ;;
+    esac
+
+    canonical_base="$(cd "$base" 2>/dev/null && pwd -P)" || return 1
+    [[ "$canonical_base" == "$base" ]] || return 1
+    parent="${file%/*}"
+    canonical_parent="$(cd "$parent" 2>/dev/null && pwd -P)" || return 1
+    case "$canonical_parent" in
+        "$canonical_base"|"$canonical_base"/*) ;;
+        *) return 1 ;;
+    esac
+
+    relative="${parent#"$base"}"
+    relative="${relative#/}"
+    current="$base"
+    while [[ -n "$relative" ]]; do
+        component="${relative%%/*}"
+        current="$current/$component"
+        [[ ! -L "$current" ]] || return 1
+        if [[ "$relative" == */* ]]; then
+            relative="${relative#*/}"
+        else
+            relative=""
+        fi
+    done
+}
+
 council_research_preview_file() {
     local file="$1"
     local label="$2"
-    [[ -f "$file" ]] || return 0
+    local base="$3"
+    council_research_path_is_safe "$file" "$base" || return 0
 
     printf '\n### %s\n\n' "$label"
     printf 'Source: `%s`\n\n' "$file"
@@ -267,13 +303,13 @@ council_research_preview_file() {
 council_research_preview_dir() {
     local dir="$1"
     local label="$2"
-    [[ -d "$dir" ]] || return 0
+    [[ -d "$dir" && ! -L "$dir" ]] || return 0
 
     local file count
     count=0
     while IFS= read -r file; do
         count=$((count + 1))
-        council_research_preview_file "$file" "${label}: $(basename "$file")"
+        council_research_preview_file "$file" "${label}: $(basename "$file")" "$dir"
         [[ "$count" -ge 5 ]] && break
     done < <(find "$dir" -maxdepth 2 -type f -name '*.md' | sort)
 }
@@ -294,7 +330,7 @@ council_write_research_artifact() {
         if [[ -n "$COUNCIL_CORPUS_ROOT" ]]; then
             echo
             printf 'Corpus root: `%s`\n' "$COUNCIL_CORPUS_ROOT"
-            council_research_preview_file "$COUNCIL_CORPUS_ROOT/graphify-out/GRAPH_REPORT.md" "Graphify Report"
+            council_research_preview_file "$COUNCIL_CORPUS_ROOT/graphify-out/GRAPH_REPORT.md" "Graphify Report" "$COUNCIL_CORPUS_ROOT/graphify-out"
             council_research_preview_dir "$COUNCIL_CORPUS_ROOT/03_knowledge_base" "Knowledge Base"
             council_research_preview_dir "$COUNCIL_CORPUS_ROOT/02_extracted_markdown" "Extracted Markdown"
         else

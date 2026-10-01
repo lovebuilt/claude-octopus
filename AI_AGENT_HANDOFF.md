@@ -1,16 +1,40 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-27
-Status: v10.0.0 is released. Broader issue-pattern regression coverage and
-installed-package UAT are published in PR #971, with no private environment,
-network, authentication, or operational details in the public diff.
-Branch: `codex/issue-pattern-uat`, based on `upstream/main` `23554eff`.
+Status: Aardvark research-corpus symlink disclosure is remediated on the current
+`work` branch. Research previews now reject symlinked corpus files/directories
+and require canonical confinement beneath the expected corpus subdirectory.
+Branch: `work`, based on `46d64cb`.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
 updated for the post-release follow-ups.
-Next action: monitor PR #971's exact-head checks and resolve its review threads.
-Keep private UAT records out of commits and preserve unrelated dirty state in
-the coordination checkout.
+Next action: push the current commit and publish the security-fix pull request
+once GitHub connectivity is available.
+
+## Aardvark Research Corpus Symlink Fix
+
+- Confirmed the reported vulnerability still existed at HEAD: research-first read
+  `graphify-out/GRAPH_REPORT.md` through a repository-controlled symlink and
+  embedded the result in provider prompts.
+- Added fail-closed validation for preview files: the leaf and all inspected path
+  components must not be symlinks, and canonical parents must remain under the
+  canonical expected corpus subdirectory. Symlinked preview directories are
+  ignored.
+- Added an end-to-end artifact regression with both a symlinked graph report and
+  a symlinked knowledge-base directory; neither synthetic secret reaches
+  `research.md`.
+- `bash -n scripts/lib/council.sh tests/unit/test-council-command.sh`, ShellCheck,
+  `git diff --check`, and the complete council unit suite (88/88) pass.
+- `make ci-changed` selected the full matrix because no comparison base was
+  available. The task-relevant council suite passed 88/88, but the broader run
+  hit unrelated process-cleanup timing failures in probe cancellation, provider
+  timeout, and v10 cancellation suites; their orphaned processes then cascaded
+  into YAML-workflow fixture failures. The run was stopped after the 291-suite
+  unit summary (282 passed, 9 failed) rather than continuing integration tests.
+- `bd` remains unavailable (`bd: command not found`), so no issue could be
+  created or updated. The fix is committed on `work`; push is blocked because
+  the environment proxy rejects GitHub HTTPS with HTTP 403, so pull-request
+  publication is also blocked.
 
 ## Reported-Issue Pattern UAT
 
