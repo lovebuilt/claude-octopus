@@ -26,6 +26,24 @@ fi
 # Source-safe: no main execution block.
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Contract preservation operates on framework-authenticated metadata, never on
+# a response-like phrase found in mixed user or repository content. Generate a
+# per-process marker before any prompt is assembled so untrusted input cannot
+# predict a marker that the preflight path will recognize as authoritative.
+if [[ ! "${OCTOPUS_JSON_CONTRACT_NONCE:-}" =~ ^[[:xdigit:]]{32}$ ]]; then
+    OCTOPUS_JSON_CONTRACT_NONCE="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d '[:space:]')"
+    if [[ ! "$OCTOPUS_JSON_CONTRACT_NONCE" =~ ^[[:xdigit:]]{32}$ ]]; then
+        OCTOPUS_JSON_CONTRACT_NONCE="$(printf '%016x%016x' "$$" "${RANDOM:-0}")"
+    fi
+fi
+export OCTOPUS_JSON_CONTRACT_NONCE
+
+octo_protect_json_contract() {
+    local contract="${1:-}"
+    printf '[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:%s]]\n%s\n[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:%s]]\n' \
+        "$OCTOPUS_JSON_CONTRACT_NONCE" "$contract" "$OCTOPUS_JSON_CONTRACT_NONCE"
+}
+
 #                    gpt-5.2-codex, gpt-5.4-mini (budget), gpt-5 (standard), gpt-5.2, gpt-5.1
 # - OpenAI Reasoning: o3, o3-pro (API-key only), o3 (API-key only), o3-mini (API-key only)
 # - OpenAI Large Context: gpt-4.1 (1M ctx, API-key only), gpt-5.4 (1M ctx, API-key only)
@@ -981,33 +999,23 @@ octo_summary_trigger_budget() {
 
 octo_json_contract_block() {
     local prompt="${1:-}"
-    printf '%s\n' "$prompt" | awk '
-        BEGIN { capture = 0; seen = 0 }
-        /^[[:space:]]*Return ONLY JSON matching / { capture = 1 }
-        capture {
-            if (seen && $0 ~ /^[[:space:]]*$/) exit
-            print
-            seen = 1
-        }
+    local begin="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    local end="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    printf '%s\n' "$prompt" | awk -v begin="$begin" -v end="$end" '
+        $0 == begin { capture = 1; next }
+        capture && $0 == end { exit }
+        capture { print }
     '
 }
 
 octo_without_json_contract_block() {
     local prompt="${1:-}"
-    printf '%s\n' "$prompt" | awk '
-        BEGIN { removing = 0; removed = 0 }
-        !removed && /^[[:space:]]*Return ONLY JSON matching / {
-            removing = 1
-            removed = 1
-            next
-        }
-        removing {
-            if ($0 ~ /^[[:space:]]*$/) {
-                removing = 0
-                print
-            }
-            next
-        }
+    local begin="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    local end="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    printf '%s\n' "$prompt" | awk -v begin="$begin" -v end="$end" '
+        $0 == begin { removing = 1; next }
+        removing && $0 == end { removing = 0; next }
+        removing { next }
         { print }
     '
 }
