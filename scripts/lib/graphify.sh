@@ -59,11 +59,11 @@ octo_graphify_out_dir() {
             relative=""
         fi
         [[ -z "$component" || "$component" == "." ]] && continue
-        current="$current/$component"
+        current="${current%/}/$component"
         [[ -L "$current" ]] && return 1
     done
 
-    printf '%s\n' "$candidate"
+    printf '%s\n' "$current"
 }
 
 _octo_graphify_safe_regular_file() {

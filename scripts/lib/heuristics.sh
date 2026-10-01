@@ -292,7 +292,7 @@ ${numbered_draft}"
     local normalized
     normalized=$(mktemp "${draft_file}.repair.XXXXXX") || return 1
     if ! probe_synthesis_unwrap_repair "$repaired" > "$normalized" \
-       || ! grep -q '[^[:space:]]' "$normalized"; then
+       || ! grep -c '[^[:space:]]' "$normalized" >/dev/null; then
         rm -f "$normalized"
         return 1
     fi

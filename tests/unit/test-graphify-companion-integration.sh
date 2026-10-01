@@ -138,6 +138,25 @@ else
     test_fail "report fence collided with content"
 fi
 
+test_case "Graphify normalizes safe directory aliases before reading context"
+expected_out=$(cd -P "$graphify_fixture/project/graphify-out" && pwd -P)
+alias_ok=true
+for out in graphify-out/ ./graphify-out graphify-out// \
+        "$expected_out/"; do
+    normalized_out=$(GRAPHIFY_OUT="$out" octo_graphify_out_dir "$graphify_fixture/project")
+    graphify_context=$(GRAPHIFY_OUT="$out" octo_graphify_context_for_prompt "$graphify_fixture/project" 12000)
+    if [[ "$normalized_out" != "$expected_out" \
+            || "$graphify_context" != *"embedded fence"* ]]; then
+        alias_ok=false
+        break
+    fi
+done
+if [[ "$alias_ok" == true ]]; then
+    test_pass
+else
+    test_fail "safe directory alias did not resolve to readable context"
+fi
+
 test_case "Graphify omits context when budget cannot hold its warning and fences"
 if [[ -z "$(octo_graphify_context_for_prompt "$graphify_fixture/project" 40)" ]]; then
     test_pass
