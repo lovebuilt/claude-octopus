@@ -142,16 +142,43 @@ def snapshot(pid):
     return ProcessInfo(pid, parent, token, version, stopped)
 
 
+def _linux_proc_children(pid):
+    """Enumerate direct children from mandatory process stat records."""
+    result = []
+    # Reading our own record verifies that procfs supports the stat view before
+    # an empty scan can be interpreted as "no children".
+    Path("/proc/self/stat").read_text()
+    with os.scandir("/proc") as entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                fields = Path(entry.path, "stat").read_text().rsplit(")", 1)[1].split()
+            except FileNotFoundError:
+                # Processes may exit while /proc is being scanned.
+                continue
+            if int(fields[1]) == pid:
+                result.append(int(entry.name))
+    return sorted(result)
+
+
 def children(pid):
     if sys.platform.startswith("linux"):
         result = set()
+        supported = False
         # Children can be forked by any thread, not only the thread-group leader.
         for task in Path(f"/proc/{pid}/task").glob("*"):
             try:
                 result.update(int(value) for value in (task / "children").read_text().split())
+                supported = True
             except FileNotFoundError:
                 continue
-        return sorted(result)
+        if supported:
+            return sorted(result)
+        # CONFIG_CHECKPOINT_RESTORE controls the per-thread children file on
+        # some kernels. Fall back to the universally supported PPID field and
+        # propagate scan errors so cancellation cannot claim false success.
+        return _linux_proc_children(pid)
     lib = _darwin()
     capacity = max(16, lib.proc_listchildpids(pid, None, 0) + 16)
     for _ in range(4):
