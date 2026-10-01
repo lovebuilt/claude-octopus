@@ -37,7 +37,7 @@ attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >> "$FIXTURE_CALLS"
 case "$FIXTURE_SCENARIO" in
     success|kimi-success|council-global-budget|council-default-budget) printf '%s\n' 'Substantive provider result.' ;;
-    exact-seat)
+    exact-seat|contract-marker-input)
         cat > "$FIXTURE_ROOT/received-prompt"
         printf '%s\n' 'Substantive provider result.'
         ;;
@@ -207,7 +207,7 @@ run_fixture() {
     mkdir -p "$RESULTS_DIR"
 
     set +e
-    run_agent_sync "$agent_type" 'Review the fixture.' "$timeout_secs" "$role" "$phase" \
+    run_agent_sync "$agent_type" "${5:-Review the fixture.}" "$timeout_secs" "$role" "$phase" \
         > "$FIXTURE_ROOT/stdout" 2> "$FIXTURE_ROOT/stderr"
     fixture_rc=$?
     set -e
@@ -282,6 +282,51 @@ if grep -q 'Engineering method selection' "$TEST_TMP_DIR/exact-seat/received-pro
     test_pass
 else
     test_fail "method selection did not cross the provider stdin boundary"
+fi
+
+test_case "actual synchronous provider stdin retains JSON rules without marker authentication tokens"
+if (
+    fixture_command_definition="$(declare -f get_agent_command)"
+    fixture_model_definition="$(declare -f get_agent_model)"
+    fixture_persona_definition="$(declare -f apply_persona)"
+    source "$PROJECT_ROOT/scripts/lib/dispatch.sh"
+    eval "$fixture_command_definition"
+    eval "$fixture_model_definition"
+    eval "$fixture_persona_definition"
+    get_provider_context_limit() { printf '10000\n'; }
+    contract='Return ONLY JSON matching the fixture contract. Preserve the approved task.'
+    prompt="$(octo_protect_json_contract "$contract")"
+    run_fixture contract-marker-input codex tangle 5 "$prompt"
+    if [[ "$fixture_rc" != 0 ]]; then printf 'Marker fixture rc=%s\n' "$fixture_rc"; cat "$FIXTURE_ROOT/stderr"; fi
+    [[ "$fixture_rc" == 0 ]] &&
+      grep -Fq "$contract" "$FIXTURE_ROOT/received-prompt" &&
+      ! grep -Fq OCTOPUS_TRUSTED_JSON_CONTRACT_ "$FIXTURE_ROOT/received-prompt" &&
+      ! grep -Fq "$OCTOPUS_JSON_CONTRACT_NONCE" "$FIXTURE_ROOT/received-prompt"
+); then
+    test_pass
+else
+    test_fail "actual synchronous provider lost JSON rules or received the controller's nonce"
+fi
+
+test_case "actual synchronous dispatch rejects echoed authenticated blocks before launching a provider"
+if (
+    fixture_command_definition="$(declare -f get_agent_command)"
+    fixture_model_definition="$(declare -f get_agent_model)"
+    fixture_persona_definition="$(declare -f apply_persona)"
+    source "$PROJECT_ROOT/scripts/lib/dispatch.sh"
+    eval "$fixture_command_definition"
+    eval "$fixture_model_definition"
+    eval "$fixture_persona_definition"
+    get_provider_context_limit() { printf '10000\n'; }
+    prompt="$(octo_protect_json_contract 'Provider echo chose a different contract.')
+$(octo_protect_json_contract 'Controller requires the real JSON contract.')"
+    run_fixture contract-marker-duplicate codex tangle 5 "$prompt"
+    if [[ "$fixture_rc" != 78 ]]; then printf 'Duplicate fixture rc=%s\n' "$fixture_rc"; cat "$FIXTURE_ROOT/stderr"; fi
+    [[ "$fixture_rc" == 78 && ! -f "$FIXTURE_CALLS" ]]
+); then
+    test_pass
+else
+    test_fail "duplicate authenticated framing reached an actual provider launch"
 fi
 assert_scenario agy-pin 0 1 \
     planned,starting,authenticated,running,output_received,validated,contributed \

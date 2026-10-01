@@ -1991,8 +1991,8 @@ tangle_decomposition_wire_output_usable() {
 }
 
 
-tangle_decomposition_json_contract_guidance() {
-    octo_protect_json_contract "$(cat <<'EOF'
+tangle_decomposition_json_contract_text() {
+    cat <<'EOF'
 Return ONLY JSON matching Tangle decomposition schema v1. No Markdown fences, headings, or prose.
 Shape:
 {"schema_version":1,"subtasks":[{"id":1,"kind":"coding","title":"Short title","reads":[],"files":["relative/file.js"],"creates":[],"task":"Specific coding work"}]}
@@ -2008,7 +2008,10 @@ Rules:
 - reads is read-only context and never grants write permission.
 - include at least one coding subtask and preserve the original deliverable.
 EOF
-)"
+}
+
+tangle_decomposition_json_contract_guidance() {
+    octo_protect_json_contract "$(tangle_decomposition_json_contract_text)"
 }
 
 tangle_decomposition_json_payload() {
@@ -2403,7 +2406,7 @@ Rules:
 - action/path must exactly match the adequacy recommendation; reason is non-empty planner rationale.
 - decomposition must satisfy Tangle decomposition JSON schema v1. Every subtask object has exactly the keys id, kind, title, reads, files, creates and task, even when the current decomposition is shown as text:
 EOF
-    tangle_decomposition_json_contract_guidance | sed -n '/^Rules:$/,$p' | sed '1d; s/^- /  - /'
+    tangle_decomposition_json_contract_text | sed -n '/^Rules:$/,$p' | sed '1d; s/^- /  - /'
     cat <<'EOF'
 - preserve the original deliverable and keep coding scopes disjoint.
 - do not emit Markdown, prose before/after JSON, DECISIONS:/DECOMPOSITION: text, or globs.

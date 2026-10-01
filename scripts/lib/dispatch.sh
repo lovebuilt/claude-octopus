@@ -993,9 +993,13 @@ octo_json_contract_block() {
     local begin="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
     local end="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
     printf '%s\n' "$prompt" | awk -v begin="$begin" -v end="$end" '
-        $0 == begin { capture = 1; block = ""; next }
-        capture && $0 == end { printf "%s", block; exit }
+        $0 == begin { starts++; if (starts != 1 || ends || capture) invalid = 1; capture = 1; next }
+        $0 == end { ends++; if (ends != 1 || !capture) invalid = 1; capture = 0; next }
         capture { block = block $0 "\n" }
+        END {
+            if (invalid || capture || starts != ends) exit 2
+            if (starts == 1) printf "%s", block
+        }
     '
 }
 
@@ -1004,15 +1008,20 @@ octo_without_json_contract_block() {
     local begin="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
     local end="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
     printf '%s\n' "$prompt" | awk -v begin="$begin" -v end="$end" '
-        $0 == begin { removing = 1; next }
-        removing && $0 == end { removing = 0; next }
+        $0 == begin { starts++; if (starts != 1 || ends || removing) invalid = 1; removing = 1; next }
+        $0 == end { ends++; if (ends != 1 || !removing) invalid = 1; removing = 0; next }
         removing { next }
-        { print }
+        { body = body $0 "\n" }
+        END {
+            if (invalid || removing || starts != ends) exit 2
+            printf "%s", body
+        }
     '
 }
 
 octo_summary_preserves_structure() {
     local original="$1" summary="$2" anchor protected_contract
+    octo_json_contract_block "$summary" >/dev/null || return 1
     for anchor in 'Task:' 'Files:' 'Creates:' 'Reads:'; do
         if [[ "$original" == *"$anchor"* && "$summary" != *"$anchor"* ]]; then
             return 1
@@ -1022,7 +1031,7 @@ octo_summary_preserves_structure() {
         return 1
     fi
 
-    protected_contract="$(octo_json_contract_block "$original")"
+    protected_contract="$(octo_json_contract_block "$original")" || return 1
     if [[ -n "$protected_contract" && "$summary" != *"$protected_contract"* ]]; then
         return 1
     fi
@@ -1034,7 +1043,7 @@ octo_fit_prompt_preserving_json_contract() {
     local protected_contract body suffix suffix_tokens contract_tokens body_budget fitted candidate candidate_tokens excess attempts=0
 
     token_budget="$(octo_normalize_context_budget "$token_budget" "protected prompt context budget")" || return 2
-    protected_contract="$(octo_json_contract_block "$original")"
+    protected_contract="$(octo_json_contract_block "$original")" || return 1
     if [[ -z "$protected_contract" ]]; then
         octo_fit_prompt_to_token_budget "$prompt" "$token_budget" "$marker"
         return $?
@@ -1045,7 +1054,7 @@ octo_fit_prompt_preserving_json_contract() {
     [[ "$prompt" == *"$protected_contract"* ]] || return 1
     contract_tokens="$(octo_estimate_prompt_tokens "$protected_contract")"
     [[ "$contract_tokens" -le "$token_budget" ]] || return 1
-    body="$(octo_without_json_contract_block "$prompt")"
+    body="$(octo_without_json_contract_block "$prompt")" || return 1
     suffix=$'\n\n'"$protected_contract"
     suffix_tokens="$(octo_estimate_prompt_tokens "$suffix")"
     if [[ "$suffix_tokens" -ge "$token_budget" ]]; then
@@ -1153,9 +1162,9 @@ summarize_then_dispatch() {
     # tail-loaded instructions/diffs because provider CLIs often fail near ARG_MAX.
     local summary_input="$prompt"
     local protected_json_contract=""
-    protected_json_contract="$(octo_json_contract_block "$prompt")"
+    protected_json_contract="$(octo_json_contract_block "$prompt")" || return 1
     if [[ -n "$protected_json_contract" ]]; then
-        summary_input="$(octo_without_json_contract_block "$summary_input")"
+        summary_input="$(octo_without_json_contract_block "$summary_input")" || return 1
     fi
     local max_summary_input="${OCTOPUS_OVERSIZE_SUMMARY_INPUT_CHARS:-120000}"
     if [[ ${#summary_input} -gt $max_summary_input ]]; then
@@ -1305,6 +1314,12 @@ enforce_context_budget() {
     local role="${2:-}"
     local agent_type="${3:-}"
     local phase="${4:-}"
+    # Authenticate the envelope before budget fitting or lossy summarization.
+    # An echoed duplicate must never replace the controller's real contract.
+    if ! octo_json_contract_block "$prompt" >/dev/null; then
+        log ERROR "Context budget: ambiguous or incomplete JSON contract envelope"
+        return 78
+    fi
     local budget provider_budget
     budget=$(get_provider_context_limit "$agent_type" "$phase" "$role")
     budget=$(octo_normalize_context_budget "$budget" "provider context budget") || return 2
@@ -1379,7 +1394,7 @@ enforce_context_budget() {
                 if [[ -n "$summarized" ]]; then
                     type record_oversize_event >/dev/null 2>&1 && record_oversize_event "$target" "$original_chars" "${#summarized}" "summarized" "$role" "$phase" "$budget" || true
                     octo_context_budget_warning "Context budget: summarized $target role=${role:-none} phase=${phase:-none} from ${original_chars} to ${#summarized} chars (budget=$budget tokens/$char_budget chars)"
-                    printf '%s\n' "$summarized"
+                    octo_strip_json_contract_markers "$summarized" || return 78
                     return 0
                 fi
                 log "DEBUG" "Context budget: truncating prompt for $target from ${#prompt} to $char_budget chars (~$budget tokens)"
@@ -1390,7 +1405,7 @@ enforce_context_budget() {
                 fi
                 type record_oversize_event >/dev/null 2>&1 && record_oversize_event "$target" "$original_chars" "${#truncated}" "truncated" "$role" "$phase" "$budget" || true
                 octo_context_budget_warning "Context budget: summarizer unavailable; truncated $target role=${role:-none} phase=${phase:-none} from ${original_chars} to ${#truncated} chars (budget=$budget tokens/$char_budget chars)"
-                printf '%s\n' "$truncated"
+                octo_strip_json_contract_markers "$truncated"
                 ;;
             truncate|*)
                 log "DEBUG" "Context budget: truncating prompt for $target from ${#prompt} to $char_budget chars (~$budget tokens)"
@@ -1401,14 +1416,14 @@ enforce_context_budget() {
                 fi
                 type record_oversize_event >/dev/null 2>&1 && record_oversize_event "$target" "$original_chars" "${#truncated}" "truncated" "$role" "$phase" "$budget" || true
                 octo_context_budget_warning "Context budget: truncated $target role=${role:-none} phase=${phase:-none} from ${original_chars} to ${#truncated} chars (budget=$budget tokens/$char_budget chars)"
-                printf '%s\n' "$truncated"
+                octo_strip_json_contract_markers "$truncated"
                 ;;
         esac
     else
         if [[ "$estimated_tokens" -gt "$budget" ]]; then
             log "DEBUG" "Context budget: admitting small oversize for ${agent_type:-unknown} role=${role:-none} phase=${phase:-none}: ${estimated_tokens} tokens vs budget ${budget} (summary trigger ${summary_trigger_budget})"
         fi
-        echo "$prompt"
+        octo_strip_json_contract_markers "$prompt"
     fi
 }
 

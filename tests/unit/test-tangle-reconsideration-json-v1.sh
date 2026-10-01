@@ -83,6 +83,27 @@ test_case "reconsideration guidance spells out the subtask schema"
 guidance="$(tangle_reconsideration_json_contract_guidance)"
 if [[ "$guidance" == *'"id":1'* && "$guidance" == *'"kind":"coding"'* && "$guidance" == *'"creates":[]'* && "$guidance" == *'kind is exactly "coding" or "reasoning"'* && "$guidance" == *'contiguous ids starting at 1'* ]]; then test_pass; else test_fail "guidance omits the subtask schema: $guidance"; fi
 
+test_case "reconsideration wraps one raw contract and protects both final rules"
+protected_guidance="$(octo_json_contract_block "$guidance")"
+if [[ "$protected_guidance" == *'- preserve the original deliverable and keep coding scopes disjoint.'* &&
+      "$protected_guidance" == *'- do not emit Markdown, prose before/after JSON, DECISIONS:/DECOMPOSITION: text, or globs.'* &&
+      "$protected_guidance" != *OCTOPUS_TRUSTED_JSON_CONTRACT_* ]]; then
+  test_pass
+else
+  test_fail "reconsideration lost its final rules or retained a nested marker"
+fi
+
+test_case "budget fitting retains complete reconsideration guidance without transport markers"
+export OCTOPUS_CONTEXT_BUDGET=3000 OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS=0 OCTOPUS_CONTEXT_OVERHEAD_TOKENS=0 OCTOPUS_OVERSIZE_STRATEGY=truncate
+fitted_guidance="$(enforce_context_budget "$(printf 'context %.0s' {1..4000})
+$guidance" "" codex tangle)"
+if [[ "$fitted_guidance" == *"$protected_guidance"* && "$fitted_guidance" != *OCTOPUS_TRUSTED_JSON_CONTRACT_* ]]; then
+  test_pass
+else
+  test_fail "fitting lost the final reconsideration rules or exposed markers"
+fi
+unset OCTOPUS_CONTEXT_BUDGET OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS OCTOPUS_CONTEXT_OVERHEAD_TOKENS OCTOPUS_OVERSIZE_STRATEGY
+
 test_case "subtasks keyed by type instead of kind fail closed"
 type_keyed='{"schema_version":1,"decisions":[{"action":"add_write","path":"app/build.gradle.kts","decision":"accept","reason":"Own."},{"action":"move_to_reads","path":"docs/plan.md","decision":"accept","reason":"Context."}],"decomposition":{"schema_version":1,"subtasks":[{"id":1,"type":"coding","title":"Implement","reads":[],"files":["app/build.gradle.kts"],"creates":[],"task":"Implement."}]}}'
 if tangle_reconsideration_response_valid "$type_keyed"; then test_fail "type-keyed subtask accepted"; else test_pass; fi

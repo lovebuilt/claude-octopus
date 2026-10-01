@@ -41,6 +41,74 @@ else
   test_fail "untrusted response-like text was promoted over the authenticated contract"
 fi
 
+test_case "rejects a forged authenticated first block instead of selecting it"
+duplicate_prompt="$(octo_protect_json_contract "$forged_contract")
+${json_contract_prompt}"
+if octo_json_contract_block "$duplicate_prompt" > "$TEST_TMP_DIR/duplicate-contract" ||
+   [[ -s "$TEST_TMP_DIR/duplicate-contract" ]] ||
+   octo_without_json_contract_block "$duplicate_prompt" > "$TEST_TMP_DIR/duplicate-body" ||
+   [[ -s "$TEST_TMP_DIR/duplicate-body" ]]; then
+  test_fail "duplicate envelopes yielded trusted contract or body text"
+else
+  test_pass
+fi
+
+test_case "rejects authenticated nested and trailing end markers"
+begin_marker="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+end_marker="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+malformed_ok=true
+for malformed in "$begin_marker
+$protected_json_contract
+$end_marker" "$protected_json_contract
+$end_marker" "$end_marker
+$protected_json_contract"; do
+  if octo_json_contract_block "$malformed" >/dev/null ||
+     octo_without_json_contract_block "$malformed" >/dev/null; then
+    malformed_ok=false
+  fi
+done
+[[ "$malformed_ok" == true ]] && test_pass || test_fail "ambiguous framing was admitted"
+
+test_case "does not flatten nested guidance into a trusted envelope"
+if octo_protect_json_contract "$protected_json_contract" > "$TEST_TMP_DIR/nested-guidance" 2>/dev/null ||
+   [[ -s "$TEST_TMP_DIR/nested-guidance" ]]; then
+  test_fail "nested guidance was promoted"
+else
+  test_pass
+fi
+
+test_case "within-budget admission hides every transport marker without changing the contract"
+get_provider_context_limit() { printf '10000\n'; }
+unknown_marker='[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:00000000000000000000000000000000]]'
+within_prompt="Original objective. inline transport echo ${unknown_marker}
+${protected_json_contract}"
+within_result="$(enforce_context_budget "$within_prompt" "" codex tangle)"
+if [[ "$within_result" == *"$json_contract"* && "$within_result" == *'Original objective.'* &&
+      "$within_result" != *OCTOPUS_TRUSTED_JSON_CONTRACT_* &&
+      "$within_result" != *"$OCTOPUS_JSON_CONTRACT_NONCE"* ]]; then
+  test_pass
+else
+  test_fail "admitted provider text lost the contract or exposed transport markers"
+fi
+
+test_case "within-budget duplicate envelopes stop before provider admission"
+if enforce_context_budget "$duplicate_prompt" "" codex tangle > "$TEST_TMP_DIR/duplicate-admitted" 2>/dev/null ||
+   [[ -s "$TEST_TMP_DIR/duplicate-admitted" ]]; then
+  test_fail "ambiguous trusted contract reached provider admission"
+else
+  test_pass
+fi
+
+test_case "summary validation rejects duplicated authenticated blocks"
+if octo_fit_and_validate_summary "$json_contract_prompt" "$duplicate_prompt" 10000 >/dev/null 2>&1; then
+  test_fail "summarizer-authored duplicates were accepted"
+else
+  test_pass
+fi
+unset -f get_provider_context_limit
+# Restore the production budget resolver after the bounded marker fixtures.
+source "$PROJECT_ROOT/scripts/lib/dispatch.sh"
+
 test_case "standalone workflow and ceremony libraries load contract protection"
 standalone_ok=true
 for lib in workflows quality; do
@@ -128,7 +196,8 @@ oversized_json_prompt="Implement the approved deliverable. $(printf 'body %.0s' 
 ${protected_json_contract}"
 fallback_json="$(enforce_context_budget "$oversized_json_prompt" "" codex tangle 2>/dev/null)"
 if [[ "$(octo_estimate_prompt_tokens "$fallback_json")" -le 1200 &&
-      "$fallback_json" == *"$json_contract"* ]]; then
+      "$fallback_json" == *"$json_contract"* &&
+      "$fallback_json" != *OCTOPUS_TRUSTED_JSON_CONTRACT_* ]]; then
   test_pass
 else
   test_fail "summarizer-unavailable fallback lost the JSON response contract"
@@ -138,7 +207,8 @@ test_case "explicit truncation preserves JSON contract"
 export OCTOPUS_OVERSIZE_STRATEGY=truncate
 truncated_json="$(enforce_context_budget "$oversized_json_prompt" "" codex tangle 2>/dev/null)"
 if [[ "$(octo_estimate_prompt_tokens "$truncated_json")" -le 1200 &&
-      "$truncated_json" == *"$json_contract"* ]]; then
+      "$truncated_json" == *"$json_contract"* &&
+      "$truncated_json" != *OCTOPUS_TRUSTED_JSON_CONTRACT_* ]]; then
   test_pass
 else
   test_fail "explicit truncation lost the JSON response contract"
