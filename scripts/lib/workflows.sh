@@ -226,6 +226,17 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
     fi
     echo "# Started: $(date)" >> "$result_file"
     echo "" >> "$result_file"
+    local _probe_nonce _probe_nonce_pattern='^[0-9a-f]{32}$'
+    _probe_nonce=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || _probe_nonce=""
+    if [[ ! "$_probe_nonce" =~ $_probe_nonce_pattern ]]; then
+        printf '## Output\n```\n(no provider launched)\n```\n## Status: FAILED (Unable to generate result nonce)\n' >> "$result_file"
+        update_agent_status "$agent_type" "failed" 0 "$estimated_cost" "$TIMEOUT" "$task_id" "$phase" "$result_file"
+        type write_agent_status >/dev/null 2>&1 && write_agent_status \
+            "$agent_type" "failed" "$tokens_in" 0 "Unable to generate result nonce" \
+            0 "$result_file" "$role" || true
+        return 74
+    fi
+    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
     echo "## Output" >> "$result_file"
     echo '```' >> "$result_file"
 
@@ -332,11 +343,14 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
             && octo_file_has_codex_recoverable_stderr "$temp_errors"; then
             echo "(Codex response was emitted on stderr; see Errors transcript below.)" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
             echo "" >> "$result_file"
             echo "## Errors" >> "$result_file"
+            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
             echo '```' >> "$result_file"
             cat "$temp_errors" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
             echo "" >> "$result_file"
             codex_stderr_transcript_appended=true
         fi
@@ -360,6 +374,7 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
 
         if [[ "$codex_stderr_transcript_appended" != "true" ]]; then
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
             echo "" >> "$result_file"
         fi
         # Legacy result consumers look for literal "Status: FAILED" and "Status: TIMEOUT" markers.
@@ -369,9 +384,11 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
                 if [[ -s "$temp_errors" ]]; then
                     echo "" >> "$result_file"
                     echo "## Errors" >> "$result_file"
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
                     echo '```' >> "$result_file"
                     cat "$temp_errors" >> "$result_file"
                     echo '```' >> "$result_file"
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
                 fi
                 update_agent_status "$agent_type" "failed" "$elapsed_ms" "$estimated_cost" "$TIMEOUT" "$task_id" "$phase" "$result_file"
                 record_outcome "$agent_type" "$agent_type" "research" "$phase" "fail" "$elapsed_ms" 2>/dev/null || true
@@ -413,6 +430,7 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
             fi
         fi
         echo '```' >> "$result_file"
+        echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
         echo "" >> "$result_file"
         echo "## Status: TIMEOUT" >> "$result_file"
         log "WARN" "Agent $agent_type timed out for task $task_id"
@@ -429,14 +447,17 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
             cat "$temp_output" >> "$result_file"
         fi
         echo '```' >> "$result_file"
+        echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
         echo "" >> "$result_file"
         echo "## Status: FAILED (exit code: $exit_code)" >> "$result_file"
         if [[ -s "$temp_errors" ]]; then
             echo "" >> "$result_file"
             echo "## Errors" >> "$result_file"
+            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
             echo '```' >> "$result_file"
             cat "$temp_errors" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
         fi
         log "WARN" "Agent $agent_type failed for task $task_id (exit=$exit_code)"
         local end_time_ms elapsed_ms tokens_out

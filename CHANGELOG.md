@@ -64,6 +64,8 @@
   metrics and raw-output copies share the launcher nonce frame, and workflow,
   probe, and tangle status checks use the same trusted status reader. A hook
   capture phrase echoed in a prompt cannot bypass subprocess output capture.
+  Standalone probe results frame stdout and stderr too, and refuse to launch
+  when a result nonce cannot be generated.
 - Review debate requires a reason and code or contract evidence before it
   excludes a contested finding. Unsupported decisions retain the finding.
   The final artifact, reports, and debate audit keep excluded findings with
