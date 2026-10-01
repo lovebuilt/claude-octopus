@@ -187,6 +187,53 @@ test_synthesis_timeout_clamped_to_budget() {
 
 source "$PROJECT_ROOT/scripts/lib/council.sh"
 
+test_fallback_rechecks_deadline() {
+    test_case "chair fallback stops after an attempt exhausts the budget"
+    local result
+    result="$(
+        council_reset_defaults
+        COUNCIL_RUN_DIR="$TEST_TMP_DIR/fallback-budget"
+        mkdir -p "$COUNCIL_RUN_DIR/responses"
+        OCTOPUS_COUNCIL_DEADLINE_SECS=60
+        COUNCIL_RUN_START_EPOCH="$(date +%s)"
+        attempts=0
+        council_synthesis_capable_persona() { return 0; }
+        council_persona_should_fail() { return 1; }
+        council_pick_provider() { printf 'claude'; }
+        council_provider_is_available() { return 0; }
+        council_roster_entry_json() { printf '{"persona":"%s","provider":"claude"}' "$1"; }
+        council_dispatch_member_detached() {
+            attempts=$((attempts + 1))
+            COUNCIL_RUN_START_EPOCH=$(( $(date +%s) - 120 ))
+            return 1
+        }
+        council_run_chair_fallback known-digest || true
+        printf '%s:%s' "$attempts" "$COUNCIL_DEADLINE_HIT"
+    )"
+    if [[ "$result" == "1:true" ]]; then test_pass; else test_fail "attempts:deadline=$result"; fi
+}
+
+test_fallback_reuses_completed_response_after_deadline() {
+    test_case "chair fallback can reuse accepted advice after the deadline"
+    local result
+    result="$(
+        council_reset_defaults
+        COUNCIL_RUN_DIR="$TEST_TMP_DIR/fallback-reuse"
+        mkdir -p "$COUNCIL_RUN_DIR/responses"
+        printf 'accepted advice\n' > "$COUNCIL_RUN_DIR/responses/00-strategy-analyst.md"
+        COUNCIL_SEAT_RECORDS_JSON='[{"persona":"strategy-analyst","status":"responded"}]'
+        OCTOPUS_COUNCIL_DEADLINE_SECS=1
+        COUNCIL_RUN_START_EPOCH=$(( $(date +%s) - 120 ))
+        council_synthesis_capable_persona() { return 0; }
+        council_persona_should_fail() { return 1; }
+        council_response_is_substantive() { return 0; }
+        council_dispatch_member_detached() { printf 'unexpected dispatch'; return 1; }
+        council_run_chair_fallback known-digest || true
+        printf '%s:%s' "$COUNCIL_CHAIR_RESPONSE_RECEIVED" "$COUNCIL_CHAIR_FALLBACK_PERSONA"
+    )"
+    if [[ "$result" == "true:strategy-analyst" ]]; then test_pass; else test_fail "reuse=$result"; fi
+}
+
 test_deadline_secs_default
 test_deadline_secs_rejects_junk
 test_deadline_remaining_sentinel_when_inactive
@@ -195,5 +242,7 @@ test_seat_timeout_clamped_to_budget
 test_synthesis_timeout_clamped_to_budget
 test_summary_carries_provenance
 test_deadline_hit_finalizes_reported_partial
+test_fallback_rechecks_deadline
+test_fallback_reuses_completed_response_after_deadline
 
 test_summary

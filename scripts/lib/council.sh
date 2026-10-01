@@ -2982,13 +2982,6 @@ council_run_chair_fallback() {
     local dispatch_timeout_provenance contribution_json artifact_digest="${1:-}"
     local evidence_root="${OCTOPUS_PROJECT_DIR:-${PROJECT_ROOT:-$PWD}}"
     [[ -d "$evidence_root" ]] || evidence_root="$PWD"
-    # Honor the aggregate deadline here too: once the budget is spent, do not spend
-    # it dispatching a fallback chair. The advice tally already stands; the run
-    # finalizes a reported partial (#2918).
-    if council_deadline_exceeded; then
-        COUNCIL_DEADLINE_HIT="true"
-        return 0
-    fi
     if [[ -z "$artifact_digest" ]]; then
         artifact_digest="$(council_artifact_digest "$evidence_root" "${COUNCIL_TASK:-}")" || artifact_digest="unavailable"
     fi
@@ -3024,6 +3017,12 @@ council_run_chair_fallback() {
         output_path="${COUNCIL_RUN_DIR}/responses/$(printf '%02d' "$index")-chair-fallback-${slug}.md"
         dispatch_rc=0
         COUNCIL_LAST_DISPATCH_TIMEOUT_PROVENANCE=""
+        # Each failed attempt can consume the remaining budget. Recheck before
+        # dispatch, while still allowing reuse of an already accepted response.
+        if council_deadline_exceeded; then
+            COUNCIL_DEADLINE_HIT="true"
+            return 0
+        fi
         council_dispatch_member_detached "$member_json" "independent-advice" "$output_path" || dispatch_rc=$?
         dispatch_timeout_provenance="$COUNCIL_LAST_DISPATCH_TIMEOUT_PROVENANCE"
         if council_response_nonempty "$output_path" \
