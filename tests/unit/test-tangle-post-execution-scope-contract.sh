@@ -252,4 +252,18 @@ else
     test_fail "scope violations were not rendered as distinct lines"
 fi
 
+test_case "write authorization keeps exact case and cannot widen to an ancestor"
+saved_changed_paths_function="$(declare -f check_tangle_worktree_changes)"
+check_tangle_worktree_changes() {
+    printf '%s\n' src/Existing.ts src package.json/child web/js/app.js Web/other.js
+}
+exact_violations=$(tangle_changed_paths_outside_write_scopes \
+    '1. [CODING] Edit source — Files: src/existing.ts, package.json — Creates: web/ — Task: edit declared files.' "$BEFORE")
+eval "$saved_changed_paths_function"
+if [[ "$exact_violations" == $'Web/other.js\npackage.json/child\nsrc\nsrc/Existing.ts' ]]; then
+    test_pass
+else
+    test_fail "scope collision comparison widened exact authority: $exact_violations"
+fi
+
 test_summary

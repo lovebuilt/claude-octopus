@@ -1558,6 +1558,18 @@ tangle_scopes_overlap() {
     return 1
 }
 
+tangle_scope_authorizes_path() {
+    local scope="${1%/}" path="$2" repo_root
+    [[ -n "$scope" && -n "$path" ]] || return 1
+    [[ "$scope" == "$path" ]] && return 0
+    # Collision checks may fold case and compare in both directions. Write
+    # authority keeps exact spelling and only descends into declared directories.
+    [[ "$path" == "$scope"/* ]] || return 1
+    repo_root=$(tangle_resolve_repo_root 2>/dev/null) || return 1
+    [[ -f "$repo_root/$scope" ]] && return 1
+    tangle_scope_is_directory "$1"
+}
+
 tangle_resolve_repo_root() {
     local repo_root
     local resolved_root
@@ -5251,7 +5263,7 @@ tangle_changed_paths_outside_write_scopes() {
         matched=false
         while IFS= read -r scope; do
             [[ -n "$scope" ]] || continue
-            if tangle_scopes_overlap "$scope" "$path"; then matched=true; break; fi
+            if tangle_scope_authorizes_path "$scope" "$path"; then matched=true; break; fi
         done <<< "$authorized_scopes"
         [[ "$matched" == true ]] || printf '%s\n' "$path"
     done <<< "$changed_paths" | sed '/^$/d' | sort -u
