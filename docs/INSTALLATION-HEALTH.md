@@ -146,7 +146,7 @@ Desktop over SSH to a Linux or macOS host. The desktop app's built-in WSL sessio
 On native Git Bash, MSYS2, and Cygwin, every registered Claude Code hook exits
 before reading input or writing state. The SessionStart root helper creates no
 stable-root copy. Codex uses the existing native Windows no-op hook commands.
-Run `python3 tests/unit/test-native-windows-hook-inert.py` and
+Run `bash tests/unit/test-native-windows-hook-inert.sh` and
 `bash tests/unit/test-windows-doctor-compat.sh` to check simulated Windows hosts,
 WSL identification, and the documented entry points. Actual Windows desktop
 installation requires a Windows host; simulation does not establish host discovery.
