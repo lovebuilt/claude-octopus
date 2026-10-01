@@ -10,6 +10,9 @@
 # Extracted from orchestrate.sh (v9.7.8)
 # Source-safe: no main execution block.
 
+# shellcheck source=scripts/lib/json-contract.sh
+source "${BASH_SOURCE[0]%/*}/json-contract.sh" || return 1
+
 
 _quality_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/agent-sync.sh

@@ -26,23 +26,8 @@ fi
 # Source-safe: no main execution block.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Contract preservation operates on framework-authenticated metadata, never on
-# a response-like phrase found in mixed user or repository content. Generate a
-# per-process marker before any prompt is assembled so untrusted input cannot
-# predict a marker that the preflight path will recognize as authoritative.
-if [[ ! "${OCTOPUS_JSON_CONTRACT_NONCE:-}" =~ ^[[:xdigit:]]{32}$ ]]; then
-    OCTOPUS_JSON_CONTRACT_NONCE="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d '[:space:]')"
-    if [[ ! "$OCTOPUS_JSON_CONTRACT_NONCE" =~ ^[[:xdigit:]]{32}$ ]]; then
-        OCTOPUS_JSON_CONTRACT_NONCE="$(printf '%016x%016x' "$$" "${RANDOM:-0}")"
-    fi
-fi
-export OCTOPUS_JSON_CONTRACT_NONCE
-
-octo_protect_json_contract() {
-    local contract="${1:-}"
-    printf '[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:%s]]\n%s\n[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:%s]]\n' \
-        "$OCTOPUS_JSON_CONTRACT_NONCE" "$contract" "$OCTOPUS_JSON_CONTRACT_NONCE"
-}
+# shellcheck source=scripts/lib/json-contract.sh
+source "${BASH_SOURCE[0]%/*}/json-contract.sh" || return 1
 
 #                    gpt-5.2-codex, gpt-5.4-mini (budget), gpt-5 (standard), gpt-5.2, gpt-5.1
 # - OpenAI Reasoning: o3, o3-pro (API-key only), o3 (API-key only), o3-mini (API-key only)
@@ -1008,9 +993,9 @@ octo_json_contract_block() {
     local begin="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
     local end="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
     printf '%s\n' "$prompt" | awk -v begin="$begin" -v end="$end" '
-        $0 == begin { capture = 1; next }
-        capture && $0 == end { exit }
-        capture { print }
+        $0 == begin { capture = 1; block = ""; next }
+        capture && $0 == end { printf "%s", block; exit }
+        capture { block = block $0 "\n" }
     '
 }
 

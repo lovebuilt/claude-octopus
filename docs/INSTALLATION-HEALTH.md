@@ -135,3 +135,18 @@ The diagnostic commands use these exit codes:
 
 JSON output remains valid when a check exits with code `1`, so automation can
 read the evidence before deciding what to do.
+
+## Windows host acceptance
+
+Octopus workflows run on Linux and macOS. Windows users can run the Claude Code
+CLI inside WSL, with a separate Linux plugin installation, or use Claude Code
+Desktop over SSH to a Linux or macOS host. The desktop app's built-in WSL sessions
+[do not load plugins](https://code.claude.com/docs/en/desktop-wsl).
+
+On native Git Bash, MSYS2, and Cygwin, every registered Claude Code hook exits
+before reading input or writing state. The SessionStart root helper creates no
+stable-root copy. Codex uses the existing native Windows no-op hook commands.
+Run `python3 tests/unit/test-native-windows-hook-inert.py` and
+`bash tests/unit/test-windows-doctor-compat.sh` to check simulated Windows hosts,
+WSL identification, and the documented entry points. Actual Windows desktop
+installation requires a Windows host; simulation does not establish host discovery.

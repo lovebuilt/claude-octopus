@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # TeammateIdle Hook Handler - Claude Code v2.1.33+
 # Dispatches queued work to idle agents during multi-agent workflows
 # ═══════════════════════════════════════════════════════════════════════════════

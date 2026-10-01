@@ -126,10 +126,10 @@ claude plugin install octo@nyldn-plugins
 
 That's it. Setup detects installed providers, shows what's missing, and walks you through configuration. You need **zero** external providers to start — Claude is built in.
 
-**Supported platforms:** Linux and macOS run natively. On Windows, run Claude
-Octopus inside [WSL](#using-cursor-on-wsl); native Git Bash, MSYS2, and Cygwin
-are not supported. Under Codex on native Windows, Octopus hooks exit without
-running, so an installed plugin stays inert rather than opening shell windows.
+**Supported platforms:** Linux and macOS run natively. For Windows, use the
+[Claude Code CLI inside WSL or a desktop SSH session](#using-claude-code-from-windows).
+Native Git Bash, MSYS2, and Cygwin are unsupported. Octopus hooks exit immediately
+on those hosts in Claude Code and Codex, without writing install or session state.
 
 ### Dormant by default
 
@@ -264,6 +264,17 @@ cd ~/.cursor/claude-octopus/mcp-server && npm install
 ```
 
 Restart Cursor. Tools appear in Cursor's AI chat — invoke by asking e.g. "use octopus_discover to research X".
+
+### Using Claude Code from Windows
+
+Install and launch the Claude Code CLI inside your WSL distribution, then install
+Octopus there. Run `claude` from the WSL terminal. Its Linux home has its own
+plugins and settings; a Windows-side installation does not carry over.
+
+For Claude Code Desktop, select an SSH environment connected to a Linux or macOS
+host and install Octopus on that host. The desktop app's built-in WSL environment
+currently does not load plugins. See the official [WSL limitations](https://code.claude.com/docs/en/desktop-wsl)
+and [desktop SSH guide](https://code.claude.com/docs/en/desktop#ssh-sessions).
 
 ### Using Cursor on WSL
 

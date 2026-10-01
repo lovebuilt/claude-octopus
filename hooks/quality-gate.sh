@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus Quality Gate Hook (v8.43.0)
 # Validates tangle output before continuing workflow
 # Returns JSON decision: {"decision": "continue|block", "reason": "..."}

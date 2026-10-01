@@ -56,7 +56,15 @@ test_same_key_supersedes_prior() {
        && [[ "$(jq -r '.superseded_by' "$r1/run-status.json")" == "$(basename "$r2")" ]] \
        && [[ "$(jq -r '.superseded' "$r2/run-status.json")" == "false" ]] \
        && [[ "$(cat "$pool/latest-$slug" 2>/dev/null)" == "$(basename "$r2")" ]]; then
-        test_pass
+        COUNCIL_RUN_DIR="$r1"
+        COUNCIL_RUN_ID="$(basename "$r1")"
+        council_write_run_status finished completed
+        if [[ "$(jq -r '.superseded' "$r1/run-status.json")" == "true" ]] &&
+           [[ "$(jq -r '.superseded_by' "$r1/run-status.json")" == "$(basename "$r2")" ]]; then
+            test_pass
+        else
+            test_fail "older run completion discarded the superseded mark"
+        fi
     else
         test_fail "r1 superseded=$(jq -r '.superseded' "$r1/run-status.json") by=$(jq -r '.superseded_by' "$r1/run-status.json"); pointer=$(cat "$pool/latest-$slug" 2>/dev/null)"
     fi

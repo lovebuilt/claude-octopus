@@ -172,6 +172,17 @@ class ProcessControlTests(unittest.TestCase):
             self.assertEqual(control.children(4242), [4343])
         fallback.assert_called_once_with(4242)
 
+    def test_linux_proc_scan_accepts_invalid_utf8_process_names(self):
+        entries = [mock.Mock(name="entry") for _ in range(2)]
+        entries[0].name, entries[0].path = "4343", "/proc/4343"
+        entries[1].name, entries[1].path = "4444", "/proc/4444"
+        scan = mock.MagicMock()
+        scan.__enter__.return_value = entries
+        records = [b"1 (self) R 0", b"4343 (child) S 4242", b"4444 (bad\xff) R 7"]
+        with mock.patch.object(control.os, "scandir", return_value=scan), \
+             mock.patch.object(Path, "read_bytes", side_effect=records):
+            self.assertEqual(control._linux_proc_children(4242), [4343])
+
     def test_linux_fallback_failure_is_not_an_empty_child_list(self):
         with mock.patch.object(sys, "platform", "linux"), \
              mock.patch.object(Path, "glob", return_value=[]), \

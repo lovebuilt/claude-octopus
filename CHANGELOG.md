@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- Review and brainstorm advisors read provider answers from completed result files
+  and permit Team mode dispatch. Codex guards allow supported noninteractive
+  subcommands and help requests while continuing to reject interactive prompts.
+- Planner reconsideration accepts a valid empty scope-decision list, checks that
+  the revised decomposition can be materialized, and retains the explanation for
+  the next adequacy review.
+- Reference checks distinguish continued command arguments from source commands.
+- Framework JSON contracts carry a random process marker, preventing repository
+  prose from being promoted to a protected response contract during prompt fitting.
+  Source-safe workflow and design-review calls load the marker helper directly.
+- Linux cancellation enumerates children through procfs PPIDs when per-thread
+  child lists are unavailable, and parses process names as bytes.
+- Native Windows Claude Code hooks return before parsing input or writing state.
+  Windows guidance distinguishes the CLI inside WSL from desktop SSH sessions.
+- Council runs enforce an aggregate deadline, preserve completed advice in a
+  partial result, and report session identity and artifact digest in summary.json.
+  run-status.json reports session identity. An opt-in supersede key marks earlier
+  matching rounds and preserves that mark when an older round finishes.
 - `orchestrate.sh --dry-run parallel <tasks.json>` no longer reports every task
   as a failed spawn. A dry-run spawn prints the command it would run but no
   provider PID, and parallel execution still waited for one, so each valid task

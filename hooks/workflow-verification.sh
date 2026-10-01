@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — Workflow Verification Hook (v9.20.0)
 # Fires on Stop event. Detects when a multi-LLM workflow command ran but
 # orchestrate.sh was never called — meaning the agent bypassed multi-provider

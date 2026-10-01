@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Provider CLI guard — blocks unsafe direct non-interactive provider dispatch.
 # PreToolUse hook on Bash. Returns block decision with correction message.
 # WHY: `codex "prompt"` launches interactive TUI which fails in non-TTY (Claude Code Bash tool).

@@ -41,6 +41,25 @@ else
   test_fail "untrusted response-like text was promoted over the authenticated contract"
 fi
 
+test_case "standalone workflow and ceremony libraries load contract protection"
+standalone_ok=true
+for lib in workflows quality; do
+  if ! bash -c 'source "$1/scripts/lib/$2.sh"; octo_protect_json_contract "framework contract"' _ "$PROJECT_ROOT" "$lib" \
+      | grep 'framework contract' >/dev/null; then
+    standalone_ok=false
+  fi
+done
+if [[ "$standalone_ok" == true ]]; then test_pass; else test_fail "source-safe caller lost its contract helper"; fi
+
+test_case "rejects an incomplete authenticated envelope"
+incomplete="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]
+${json_contract}"
+if [[ -z "$(octo_json_contract_block "$incomplete")" ]]; then
+  test_pass
+else
+  test_fail "unterminated contract was promoted"
+fi
+
 test_case "rejects legacy summary when original requires JSON"
 run_agent_sync() {
   printf '%s\n' '1. [CODING] Implement — Reads: plan.md — Files: app.kt — Creates: tests.kt — Task: legacy wire response'

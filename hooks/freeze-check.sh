@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus Freeze Mode Hook (v9.8.0)
 # PreToolUse hook on Edit/Write/apply_patch that blocks writes outside a frozen boundary.
 # Activated by /octo:freeze command (writes directory to state file).

@@ -3,6 +3,9 @@
 # Extracted from orchestrate.sh to reduce file size
 # Functions: probe_single_agent, probe_discover, grasp_define, tangle_develop, ink_deliver
 
+# shellcheck source=scripts/lib/json-contract.sh
+source "${BASH_SOURCE[0]%/*}/json-contract.sh" || return 1
+
 if ! type probe_result_file_status >/dev/null 2>&1; then
     _octo_probe_results_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/probe-results.sh"
     [[ -f "$_octo_probe_results_lib" ]] && source "$_octo_probe_results_lib"
@@ -4860,6 +4863,9 @@ $(tangle_decomposition_json_contract_guidance)"
         if [[ -z "$reconsidered_subtasks" ]]; then
             log ERROR "Planner reconsideration did not return a usable DECOMPOSITION"
             return 1
+        fi
+        if [[ -z "$planner_decisions" ]]; then
+            planner_decisions="- NONE: the adequacy review raised no scope_review recommendations; the decomposition was revised for its semantic findings only."
         fi
         subtasks="$reconsidered_subtasks"
         parseable_subtask_count=$(tangle_parseable_subtask_count "$subtasks")

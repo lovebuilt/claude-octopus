@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus Careful Mode Hook (v9.8.0)
 # PreToolUse hook on Bash that warns before destructive command patterns.
 # Activated by /octo:careful command (writes state file).

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # stop-failure-log.sh — Log API errors for diagnostics
 # Hook event: StopFailure (CC v2.1.78+)
 # Note: StopFailure hook output and exit code are ignored by CC.

@@ -121,7 +121,7 @@ def snapshot(pid):
     _validate_pid(pid)
     if sys.platform.startswith("linux"):
         try:
-            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            fields = Path(f"/proc/{pid}/stat").read_bytes().rsplit(b")", 1)[1].split()
         except FileNotFoundError as error:
             raise ProcessLookupError(errno.ESRCH, "process exited") from error
         if fields[0] in ("Z", "X"):
@@ -147,13 +147,13 @@ def _linux_proc_children(pid):
     result = []
     # Reading our own record verifies that procfs supports the stat view before
     # an empty scan can be interpreted as "no children".
-    Path("/proc/self/stat").read_text()
+    Path("/proc/self/stat").read_bytes()
     with os.scandir("/proc") as entries:
         for entry in entries:
             if not entry.name.isdigit():
                 continue
             try:
-                fields = Path(entry.path, "stat").read_text().rsplit(")", 1)[1].split()
+                fields = Path(entry.path, "stat").read_bytes().rsplit(b")", 1)[1].split()
             except FileNotFoundError:
                 # Processes may exit while /proc is being scanned.
                 continue

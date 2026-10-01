@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # cwd-changed.sh — Re-detect project context when working directory changes
 # Hook event: CwdChanged (CC v2.1.83+)
 # Outputs additionalContext with project type detection for the new directory.

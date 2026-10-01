@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus ConfigChange Hook Handler
 # Triggered when Claude Code configuration changes (v2.1.49+)
 # Detects Octopus setting changes and writes reload signal for orchestrate.sh
