@@ -124,9 +124,9 @@ def snapshot(pid):
             fields = Path(f"/proc/{pid}/stat").read_bytes().rsplit(b")", 1)[1].split()
         except FileNotFoundError as error:
             raise ProcessLookupError(errno.ESRCH, "process exited") from error
-        if fields[0] in ("Z", "X"):
+        if fields[0] in (b"Z", b"X"):
             raise ProcessLookupError(errno.ESRCH, "process exited")
-        birth, parent, version, stopped = fields[19], int(fields[1]), 0, fields[0] in ("T", "t")
+        birth, parent, version, stopped = fields[19].decode("ascii"), int(fields[1]), 0, fields[0] in (b"T", b"t")
     elif sys.platform == "darwin":
         before = _darwin_info(pid, 17, _UniqueInfo)
         short = _darwin_info(pid, 13, _ShortInfo)

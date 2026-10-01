@@ -172,6 +172,22 @@ class ProcessControlTests(unittest.TestCase):
             self.assertEqual(control.children(4242), [4343])
         fallback.assert_called_once_with(4242)
 
+    def test_linux_byte_stat_preserves_stopped_and_zombie_states(self):
+        for state in [b"T", b"t", b"Z", b"X"]:
+            record = b"4242 (bad\xff) " + state + b" 20 " + b"0 " * 17 + b"12345"
+            with mock.patch.object(sys, "platform", "linux"), \
+                 mock.patch.object(Path, "read_bytes", return_value=record), \
+                 mock.patch.object(control, "_boot_id", return_value="test-boot"):
+                if state in [b"Z", b"X"]:
+                    with self.assertRaises(ProcessLookupError):
+                        control.snapshot(4242)
+                else:
+                    snapshot = control.snapshot(4242)
+                    self.assertTrue(snapshot.stopped)
+                    self.assertEqual(snapshot.ppid, 20)
+                    expected = control.hashlib.sha256(b"test-boot:4242:12345").hexdigest()
+                    self.assertEqual(snapshot.token, expected)
+
     def test_linux_proc_scan_accepts_invalid_utf8_process_names(self):
         entries = [mock.Mock(name="entry") for _ in range(2)]
         entries[0].name, entries[0].path = "4343", "/proc/4343"
