@@ -15,7 +15,7 @@ import time
 def pool_lock(pool):
     # Kernel locks release when their owner exits, including SIGKILL. Never
     # unlink the lock file: doing so would let writers lock different inodes.
-    with (pool / ".run-state.lock").open("a") as handle:
+    with (pool / ".run-state.lock").open("a", encoding="utf-8") as handle:
         deadline = time.monotonic() + 10
         while True:
             try:
@@ -31,18 +31,22 @@ def pool_lock(pool):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def read_record(path):
+def read_record(path, best_effort=True):
     try:
-        record = json.loads(path.read_text())
+        record = json.loads(path.read_text(encoding="utf-8"))
         return record if isinstance(record, dict) else {}
     except (FileNotFoundError, ValueError):
+        return {}
+    except OSError:
+        if not best_effort:
+            raise
         return {}
 
 
 def atomic_text(path, text):
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".tmp.", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "w") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(text)
         os.replace(temporary, path)
     finally:
@@ -60,20 +64,28 @@ def creation_order(record):
 
 
 def pool_records(pool, include_staging=False):
-    for directory in pool.iterdir():
-        if not directory.is_dir() or (directory.name.startswith(".") and not include_staging):
-            continue
-        path = directory / "run-status.json"
-        record = read_record(path)
-        if record:
-            yield path, record
+    # A sibling may be removed or become unreadable while a poller scans it.
+    # The current run's lock and writes still fail if their own paths are broken.
+    try:
+        for directory in pool.iterdir():
+            try:
+                if not directory.is_dir() or (directory.name.startswith(".") and not include_staging):
+                    continue
+            except OSError:
+                continue
+            path = directory / "run-status.json"
+            record = read_record(path)
+            if record:
+                yield path, record
+    except OSError:
+        return
 
 
 def write_status(run_dir, record):
     pool = run_dir.parent
     path = run_dir / "run-status.json"
     with pool_lock(pool):
-        existing = read_record(path)
+        existing = read_record(path, best_effort=False)
         if existing:
             # An older completion must merge the supersession mark while holding
             # the same lock as the newer run's scanner.
@@ -83,7 +95,7 @@ def write_status(run_dir, record):
         else:
             counter = pool / ".run-state-sequence"
             try:
-                sequence = int(counter.read_text())
+                sequence = int(counter.read_text(encoding="utf-8"))
             except (FileNotFoundError, ValueError):
                 sequence = 0
             # Include unpublished staging beacons so concurrent creation cannot

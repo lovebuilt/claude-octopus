@@ -244,6 +244,28 @@ test_failed_initial_beacon_is_not_published() {
     fi
 }
 
+test_missing_python_fails_before_creating_a_run() {
+    test_case "missing Python reports a prerequisite before parsing or run creation"
+    local pool diagnostic rc=0
+    pool="$TEST_TMP_DIR/missing-python-pool"
+    diagnostic="$TEST_TMP_DIR/missing-python.err"
+    (
+        council_reset_defaults
+        command() {
+            if [[ "${1:-}" == -v && "${2:-}" == python3 ]]; then return 1; fi
+            builtin command "$@"
+        }
+        council_parse_args() { touch "$TEST_TMP_DIR/unexpected-parse"; }
+        COUNCIL_OUTPUT_DIR="$pool" council_run "task"
+    ) > /dev/null 2> "$diagnostic" || rc=$?
+    if [[ "$rc" == 2 && ! -e "$pool" && ! -e "$TEST_TMP_DIR/unexpected-parse" ]] \
+       && grep -q 'Python 3 is required for atomic run-state updates' "$diagnostic"; then
+        test_pass
+    else
+        test_fail "missing Python failed without an early prerequisite diagnostic (rc=$rc)"
+    fi
+}
+
 source "$PROJECT_ROOT/scripts/lib/council.sh"
 
 test_supersede_key_slug_is_fs_safe
@@ -256,5 +278,6 @@ test_delayed_older_scanner_keeps_newest
 test_creation_order_does_not_follow_pid_sort
 test_completion_waits_for_supersession_lock
 test_failed_initial_beacon_is_not_published
+test_missing_python_fails_before_creating_a_run
 
 test_summary

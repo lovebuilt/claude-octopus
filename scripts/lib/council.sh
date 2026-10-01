@@ -3722,7 +3722,19 @@ council_mark_prior_runs_superseded() {
     return 0
 }
 
+council_require_run_state_runtime() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf '%s\n' 'council: Python 3 is required for atomic run-state updates. Install python3 and retry.' >&2
+        return 2
+    fi
+    if [[ ! -r "${_council_registry_dir}/../helpers/council-run-state.py" ]]; then
+        printf '%s\n' 'council: council-run-state.py is missing or unreadable. Repair the Octopus installation and retry.' >&2
+        return 2
+    fi
+}
+
 council_create_run_dir() {
+    council_require_run_state_runtime || return $?
     local parent="$COUNCIL_OUTPUT_DIR"
     if [[ -z "$parent" ]]; then
         parent="${WORKSPACE_DIR:-${HOME}/.claude-octopus}/councils"
@@ -4213,6 +4225,7 @@ council_run() {
         return 0
     fi
 
+    council_require_run_state_runtime || return $?
     local _council_rc=0
     _council_run_impl "$@" || _council_rc=$?
 

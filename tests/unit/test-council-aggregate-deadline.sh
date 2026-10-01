@@ -158,7 +158,7 @@ test_deadline_hit_finalizes_reported_partial() {
     skipped="$(jq -r '.deadline.seats_skipped' "$rd/summary.json")"
     # No seat, chair fallback, or later phase may dispatch once the budget is spent:
     # seats_dispatched must be 0 and no seat may reach "responded".
-    if [[ "$status" == "partial" && "$hit" == "true" ]] && (( skipped >= 1 )) \
+    if [[ "$status" == "partial" && "$hit" == "true" && "$skipped" =~ ^[0-9]+$ ]] && (( skipped >= 1 )) \
        && jq -e '.deadline.seats_dispatched == 0' "$rd/summary.json" >/dev/null \
        && jq -e '[.seats[] | select(.status == "skipped-deadline")] | length >= 1' "$rd/summary.json" >/dev/null \
        && jq -e '[.seats[] | select(.status == "responded")] | length == 0' "$rd/summary.json" >/dev/null \
@@ -244,7 +244,22 @@ test_later_phases_bound_preparation_and_cancel_children() {
             mkdir -p "$COUNCIL_RUN_DIR/responses" "$COUNCIL_RUN_DIR/critiques" "$COUNCIL_RUN_DIR/revisions"
             COUNCIL_ROSTER_JSON='[{"persona":"strategy-analyst","provider":"codex","agent_spec":"codex","seat":"chair"}]'
             COUNCIL_DEPTH=deep
-            COUNCIL_RUN_START_EPOCH="$(date +%s)"
+            # Keep the coarse aggregate clock at its start until preparation
+            # launches. The real one-second watchdog and process-tree cleanup
+            # still run; crossing a wall-clock second before launch belongs to
+            # the separate expired-phase test below.
+            COUNCIL_RUN_START_EPOCH=1000000
+            date() {
+                if [[ "${1:-}" == +%s ]]; then
+                    if [[ -s "$COUNCIL_RUN_DIR/child.pid" ]]; then
+                        printf '%s\n' "$((COUNCIL_RUN_START_EPOCH + 1))"
+                    else
+                        printf '%s\n' "$COUNCIL_RUN_START_EPOCH"
+                    fi
+                else
+                    command date "$@"
+                fi
+            }
             OCTOPUS_COUNCIL_DEADLINE_SECS=2
             OCTOPUS_COUNCIL_DEADLINE_SEAT_FLOOR_SECS=1
             OCTOPUS_COUNCIL_REAP_GRACE_SECS=0
@@ -277,6 +292,36 @@ test_later_phases_bound_preparation_and_cancel_children() {
             [[ -z "$(find "$COUNCIL_RUN_DIR" -name '*.partial' -o -name '*.done' -o -name '*.done.tmp')" ]] || exit 1
         ); then
             test_fail "$phase exceeded its budget or left a child/late publication"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_later_phases_skip_before_preparation_when_expired() {
+    test_case "expired critique and revision phases skip preparation without watchdog provenance"
+    local phase
+    for phase in cross-critique revision-after-critique; do
+        if ! (
+            council_reset_defaults
+            COUNCIL_RUN_DIR="$TEST_TMP_DIR/expired-$phase"
+            mkdir -p "$COUNCIL_RUN_DIR/responses" "$COUNCIL_RUN_DIR/critiques" "$COUNCIL_RUN_DIR/revisions"
+            COUNCIL_ROSTER_JSON='[{"persona":"strategy-analyst","provider":"codex","agent_spec":"codex","seat":"chair"}]'
+            COUNCIL_DEPTH=deep
+            OCTOPUS_COUNCIL_DEADLINE_SECS=2
+            OCTOPUS_COUNCIL_DEADLINE_SEAT_FLOOR_SECS=1
+            OCTOPUS_COUNCIL_REAP_GRACE_SECS=0
+            COUNCIL_RUN_START_EPOCH=$(( $(date +%s) - 1 ))
+            council_prompt_for_member() { touch "$COUNCIL_RUN_DIR/preparation-started"; }
+            council_live_response() { touch "$COUNCIL_RUN_DIR/provider-started"; }
+            case "$phase" in
+                cross-critique) council_run_critique_phase ;;
+                revision-after-critique) council_run_revision_phase ;;
+            esac
+            [[ "$COUNCIL_DEADLINE_HIT" == true && -z "$COUNCIL_LAST_DISPATCH_TIMEOUT_PROVENANCE" ]]
+            [[ ! -e "$COUNCIL_RUN_DIR/preparation-started" && ! -e "$COUNCIL_RUN_DIR/provider-started" ]]
+        ); then
+            test_fail "$phase dispatched after its aggregate budget was spent"
             return
         fi
     done
@@ -343,6 +388,7 @@ test_deadline_hit_finalizes_reported_partial
 test_fallback_rechecks_deadline
 test_fallback_reuses_completed_response_after_deadline
 test_later_phases_bound_preparation_and_cancel_children
+test_later_phases_skip_before_preparation_when_expired
 test_synthesis_watchdog_uses_chair_budget
 test_synthesis_expiry_publishes_reported_partial
 

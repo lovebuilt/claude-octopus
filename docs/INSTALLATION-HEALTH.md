@@ -38,6 +38,14 @@ The report uses the same static readiness contract as setup and Doctor. It
 does not send prompts or make provider requests. A provider can be installed
 but `degraded` when authentication is missing or cannot be confirmed safely.
 
+## Council prerequisites
+
+Council requires `python3` on `PATH` for atomic run-status updates and
+same-key supersession. The helper uses the standard-library `fcntl` lock on
+macOS and Linux; no Python packages are required. Install Python 3 before
+running Council. A missing interpreter stops the run before provider dispatch
+or run-directory creation and reports the prerequisite.
+
 ## Check dispatched Claude seats
 
 Workflow preflight can run a provider smoke test. It sends a trivial prompt
