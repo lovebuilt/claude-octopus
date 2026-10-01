@@ -22,10 +22,11 @@ discover_persona_packs() {
     local extra_paths="${1:-}"
     local found=""
 
-    # Standard search paths (in priority order)
+    # Only user-owned packs are implicit. A repository must be opted into by
+    # naming its persona directory in OCTOPUS_PERSONA_PACKS (or by passing it
+    # explicitly to this function); merely entering a checkout is not consent.
     local search_paths=(
-        "${PROJECT_ROOT:-.}/.octopus/personas"    # Project-local
-        "${HOME}/.claude-octopus/personas"          # User-global
+        "${HOME}/.claude-octopus/personas"
     )
 
     # Add custom paths from env var (colon-separated)
@@ -51,6 +52,55 @@ discover_persona_packs() {
     done
 
     echo "$found" | sed '/^$/d' | sort -u
+}
+
+# Resolve a manifest persona path without allowing it to escape its pack.
+# Persona files must be regular files reached without any symlink component.
+# Usage: resolve_persona_file <pack_dir> <relative_file>
+resolve_persona_file() {
+    local pack_dir="$1"
+    local relative_file="$2"
+    local pack_real current component
+    local components
+
+    [[ -n "$relative_file" && "$relative_file" != /* ]] || return 1
+
+    pack_real=$(cd -P "$pack_dir" 2>/dev/null && pwd) || return 1
+    current="$pack_real"
+    # Deliberately split the manifest's relative path so traversal and every
+    # symlink component can be rejected before the file is opened.
+    IFS='/' read -ra components <<< "$relative_file"
+    for component in "${components[@]}"; do
+        [[ -n "$component" && "$component" != "." && "$component" != ".." ]] || return 1
+        current="$current/$component"
+        [[ ! -L "$current" ]] || return 1
+    done
+
+    [[ -f "$current" ]] || return 1
+    printf '%s\n' "$current"
+}
+
+# Confirm that an active pack still belongs to a currently approved search
+# root. This prevents registry entries created by an older vulnerable version
+# from silently re-enabling a project pack after upgrade.
+persona_pack_is_approved() {
+    local pack_dir="$1"
+    local pack_real root root_real
+    local roots=("${HOME}/.claude-octopus/personas")
+
+    if [[ -n "${OCTOPUS_PERSONA_PACKS:-}" && "${OCTOPUS_PERSONA_PACKS}" != "auto" && "${OCTOPUS_PERSONA_PACKS}" != "off" ]]; then
+        local custom_roots
+        IFS=':' read -ra custom_roots <<< "$OCTOPUS_PERSONA_PACKS"
+        roots+=("${custom_roots[@]}")
+    fi
+
+    pack_real=$(cd -P "$pack_dir" 2>/dev/null && pwd) || return 1
+    for root in "${roots[@]}"; do
+        [[ -n "$root" ]] || continue
+        root_real=$(cd -P "$root" 2>/dev/null && pwd) || continue
+        [[ "$pack_real" == "$root_real" || "$pack_real" == "$root_real/"* ]] && return 0
+    done
+    return 1
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -228,12 +278,16 @@ get_persona_override() {
         pack_dirs=$(jq -r '.[].dir' "$active_packs_file" 2>/dev/null)
         while IFS= read -r pack_dir; do
             [[ -z "$pack_dir" ]] && continue
+            persona_pack_is_approved "$pack_dir" || continue
             local personas
             personas=$(get_pack_personas "$pack_dir")
             while IFS='|' read -r file mode target; do
                 if [[ "$target" == "$agent_name" ]]; then
-                    echo "$pack_dir/$file"
-                    return 0
+                    local persona_file
+                    if persona_file=$(resolve_persona_file "$pack_dir" "$file"); then
+                        echo "$persona_file"
+                        return 0
+                    fi
                 fi
             done <<< "$personas"
         done <<< "$pack_dirs"

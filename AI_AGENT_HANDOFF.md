@@ -1,16 +1,35 @@
 # AI Agent Handoff
 
-Last updated: 2026-08-27
-Status: v10.0.0 is released. Broader issue-pattern regression coverage and
-installed-package UAT are published in PR #971, with no private environment,
-network, authentication, or operational details in the public diff.
-Branch: `codex/issue-pattern-uat`, based on `upstream/main` `23554eff`.
+Last updated: 2026-08-28
+Status: Aardvark's persona-pack path traversal report was reproduced at HEAD
+and remediated locally. Project-local packs are no longer implicitly trusted,
+and persona files are confined to regular, non-symlink files inside their pack.
+Branch: `work`, based on `46d64cba`.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
 updated for the post-release follow-ups.
-Next action: monitor PR #971's exact-head checks and resolve its review threads.
-Keep private UAT records out of commits and preserve unrelated dirty state in
-the coordination checkout.
+Next action: review the persona-pack security PR and its exact-head checks.
+`bd` and ShellCheck are unavailable in this checkout; this security task could
+not be recorded in Beads and the focused ShellCheck command could not run. The
+commit is local because both pull and push to the newly configured `origin`
+were blocked by the environment's HTTP CONNECT proxy (403).
+
+## Persona Pack Confinement
+
+- Automatic discovery now searches only the user-owned global persona path.
+  A project pack requires explicit selection through `OCTOPUS_PERSONA_PACKS`
+  (or an explicit library argument), preventing checkout-controlled manifests
+  from silently persisting into the global active-pack registry.
+- Override resolution rejects absolute paths, traversal and dot components,
+  symlink components, missing files, and non-regular files before returning a
+  canonical pack-contained path to any prompt assembly call site.
+- The focused persona suite passes 17/17, including regressions for implicit
+  project discovery, stale registrations, traversal, and symlink disclosure.
+  The intelligence suite passes 47/47, and `make sync-check`, Bash syntax, and
+  diff checks pass. `make ci-changed` failed closed to the complete local
+  matrix, but its TTY-backed run was interrupted at an interactive Council gate;
+  before interruption it also exposed the checkout's known PATH-isolation
+  failure in `test-agent-lifecycle-events.sh` (`grep`, `sed`, and `rm` absent).
 
 ## Reported-Issue Pattern UAT
 
