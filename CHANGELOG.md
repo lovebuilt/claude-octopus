@@ -64,6 +64,15 @@
   The final artifact, reports, and debate audit keep excluded findings with
   their original identity, decision, reason, and evidence.
 
+- Council research previews and Graphify report context reject symlinks and
+  paths outside their local corpus. Preview reads use the validated file
+  descriptor and a byte limit, including reports with very long lines.
+  Graphify context keeps its closing Markdown fence within the prompt budget.
+- Persona packs no longer load implicitly from the current repository.
+  Overrides require an approved root and reject traversal and symlinked files.
+  Explicit discovery and pack application retain approval for the current run.
+  Prompt consumers read bounded content through directory descriptors, so a
+  replaced persona file or pack cannot redirect the read to an external file.
 - `orchestrate.sh --dry-run parallel <tasks.json>` no longer reports every task
   as a failed spawn. A dry-run spawn prints the command it would run but no
   provider PID, and parallel execution still waited for one, so each valid task

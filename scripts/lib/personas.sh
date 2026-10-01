@@ -8,6 +8,8 @@
 # Source guard — prevent double-loading
 [[ -n "${_PERSONAS_LOADED:-}" ]] && return 0
 _PERSONAS_LOADED=1
+_PERSONA_EXPLICIT_PACKS=()
+_octo_personas_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PERSONA PACK DISCOVERY
@@ -84,9 +86,18 @@ resolve_persona_file() {
 # root. This prevents registry entries created by an older vulnerable version
 # from silently re-enabling a project pack after upgrade.
 persona_pack_is_approved() {
+    persona_pack_approved_root "$1" >/dev/null
+}
+
+# Return the trusted root separately so a later pack swap cannot change the
+# root used by the descriptor reader.
+persona_pack_approved_root() {
     local pack_dir="$1"
     local pack_real root root_real
     local roots=("${HOME}/.claude-octopus/personas")
+    # Explicit apply calls approve a pack for this process. Never recover this
+    # approval from the repository-controlled active-packs registry.
+    roots+=("${_PERSONA_EXPLICIT_PACKS[@]+"${_PERSONA_EXPLICIT_PACKS[@]}"}")
 
     if [[ -n "${OCTOPUS_PERSONA_PACKS:-}" && "${OCTOPUS_PERSONA_PACKS}" != "auto" && "${OCTOPUS_PERSONA_PACKS}" != "off" ]]; then
         local custom_roots
@@ -98,7 +109,10 @@ persona_pack_is_approved() {
     for root in "${roots[@]}"; do
         [[ -n "$root" ]] || continue
         root_real=$(cd -P "$root" 2>/dev/null && pwd) || continue
-        [[ "$pack_real" == "$root_real" || "$pack_real" == "$root_real/"* ]] && return 0
+        if [[ "$pack_real" == "$root_real" || "$pack_real" == "$root_real/"* ]]; then
+            printf '%s\n' "$root_real"
+            return 0
+        fi
     done
     return 1
 }
@@ -114,7 +128,7 @@ load_persona_pack() {
     local pack_dir="$1"
     local manifest="$pack_dir/pack.yaml"
 
-    [[ -f "$manifest" ]] || { echo ""; return 1; }
+    [[ -f "$manifest" && ! -L "$manifest" ]] || { echo ""; return 1; }
 
     # Extract fields from YAML using awk (no yq dependency)
     local name version author description
@@ -157,7 +171,7 @@ get_pack_personas() {
     local pack_dir="$1"
     local manifest="$pack_dir/pack.yaml"
 
-    [[ -f "$manifest" ]] || return 0
+    [[ -f "$manifest" && ! -L "$manifest" ]] || return 0
 
     # Parse personas section from YAML
     awk '
@@ -205,6 +219,9 @@ apply_persona_pack() {
     local pack_info
     pack_info=$(load_persona_pack "$pack_dir")
     [[ -z "$pack_info" ]] && return 1
+    local pack_real
+    pack_real=$(cd -P "$pack_dir" 2>/dev/null && pwd) || return 1
+    _PERSONA_EXPLICIT_PACKS+=("$pack_real")
 
     local pack_name
     pack_name=$(echo "$pack_info" | grep "^name=" | cut -d= -f2-)
@@ -268,6 +285,7 @@ unload_persona_pack() {
 # Usage: get_persona_override <agent_name>
 get_persona_override() {
     local agent_name="$1"
+    local output_mode="${2:-path}"
     local active_packs_file="${WORKSPACE_DIR:-.}/.octo/active-packs.json"
 
     [[ -f "$active_packs_file" ]] || { echo ""; return 0; }
@@ -278,15 +296,22 @@ get_persona_override() {
         pack_dirs=$(jq -r '.[].dir' "$active_packs_file" 2>/dev/null)
         while IFS= read -r pack_dir; do
             [[ -z "$pack_dir" ]] && continue
-            persona_pack_is_approved "$pack_dir" || continue
+            local approved_root
+            approved_root=$(persona_pack_approved_root "$pack_dir") || continue
             local personas
             personas=$(get_pack_personas "$pack_dir")
             while IFS='|' read -r file mode target; do
                 if [[ "$target" == "$agent_name" ]]; then
                     local persona_file
                     if persona_file=$(resolve_persona_file "$pack_dir" "$file"); then
-                        echo "$persona_file"
-                        return 0
+                        if [[ "$output_mode" == "content" ]]; then
+                            python3 "${_octo_personas_lib_dir}/../helpers/confined-read.py" \
+                                "$approved_root" "$persona_file" 1048576 10000 2>/dev/null || continue
+                            return 0
+                        else
+                            echo "$persona_file"
+                            return 0
+                        fi
                     fi
                 fi
             done <<< "$personas"
@@ -294,6 +319,12 @@ get_persona_override() {
     fi
 
     echo ""
+}
+
+# Prompt consumers must read through this function rather than reopening the
+# path returned by the compatibility lookup above.
+get_persona_override_content() {
+    get_persona_override "$1" content
 }
 
 # Auto-load persona packs from standard paths

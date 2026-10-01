@@ -350,7 +350,7 @@ EOF
     printf '{"pack":{"dir":"%s","persona_count":1}}\n' "$pack_dir" > "$WORKSPACE_DIR/.octo/active-packs.json"
 
     local result
-    result=$(get_persona_override debugger 2>/dev/null)
+    result=$(OCTOPUS_PERSONA_PACKS="$pack_dir" get_persona_override debugger 2>/dev/null)
     if [[ -z "$result" ]]; then
         test_pass
     else
@@ -375,12 +375,33 @@ EOF
     printf '{"pack":{"dir":"%s","persona_count":1}}\n' "$pack_dir" > "$WORKSPACE_DIR/.octo/active-packs.json"
 
     local result
-    result=$(get_persona_override debugger 2>/dev/null)
+    result=$(OCTOPUS_PERSONA_PACKS="$pack_dir" get_persona_override debugger 2>/dev/null)
     if [[ -z "$result" ]]; then
         test_pass
     else
         test_fail "Symlinked persona must be rejected, got: $result"
     fi
+}
+
+test_persona_override_accepts_explicit_pack() {
+    test_case "explicit discovery and apply preserve pack approval"
+    local root="$TEST_TMP_DIR/explicit-root" pack_dir="$TEST_TMP_DIR/explicit-root/pack"
+    mkdir -p "$pack_dir"
+    printf 'You are a debugger.\n' > "$pack_dir/persona.md"
+    pack_dir=$(cd -P "$pack_dir" && pwd)
+    printf 'name: explicit\npersonas:\n  - file: persona.md\n    replaces: debugger\n' > "$pack_dir/pack.yaml"
+    local discovered result
+    discovered=$(OCTOPUS_PERSONA_PACKS=auto discover_persona_packs "$root")
+    OCTOPUS_PERSONA_PACKS=auto apply_persona_pack "$discovered" >/dev/null
+    result=$(OCTOPUS_PERSONA_PACKS=auto get_persona_override debugger)
+    if [[ "$result" == "$pack_dir/persona.md" ]]; then test_pass
+    else test_fail "explicit pack approval was lost: $result"; fi
+
+    test_case "approved regular persona is returned through environment root"
+    _PERSONA_EXPLICIT_PACKS=()
+    result=$(OCTOPUS_PERSONA_PACKS="$root" get_persona_override debugger)
+    if [[ "$result" == "$pack_dir/persona.md" ]]; then test_pass
+    else test_fail "approved regular persona rejected: $result"; fi
 }
 
 test_persona_override_ignores_stale_project_registration() {
@@ -459,6 +480,7 @@ test_auto_load_disabled
 
 # Overrides
 test_persona_override_no_override
+test_persona_override_accepts_explicit_pack
 test_persona_override_rejects_path_escape
 test_persona_override_rejects_symlink
 test_persona_override_ignores_stale_project_registration

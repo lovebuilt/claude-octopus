@@ -323,10 +323,13 @@ council_research_preview_file() {
     local label="$2"
     local base="$3"
     council_research_path_is_safe "$file" "$base" || return 0
+    local preview
+    preview=$(python3 "${_council_registry_dir}/../helpers/confined-read.py" \
+        "${COUNCIL_CORPUS_ROOT:-${base%/*}}" "$file" 16384 80 2>/dev/null) || return 0
 
     printf '\n### %s\n\n' "$label"
     printf 'Source: `%s`\n\n' "$file"
-    sed -n '1,80p' "$file" | sed -E 's/[[:cntrl:]]//g'
+    printf '%s\n' "$preview"
     printf '\n'
 }
 
