@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+
 _profile_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -f octopus_resolve_reasoning_level >/dev/null 2>&1; then
     source "${_profile_lib_dir}/execution-profile.sh" 2>/dev/null || true
@@ -687,14 +689,9 @@ tangle_result_header_value() {
 }
 
 tangle_result_last_status() {
-    local result_file="$1"
-    awk '
-        /^## Status: / {
-            sub(/^## Status: /, "")
-            value=$0
-        }
-        END { print value }
-    ' "$result_file" 2>/dev/null || true
+    local status
+    status=$(octo_result_launcher_status "$1" 2>/dev/null || true)
+    printf '%s\n' "${status#\#\# Status: }"
 }
 
 normalize_tangle_result_agent() {

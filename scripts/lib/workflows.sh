@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+
 # Double Diamond workflow phases
 # Extracted from orchestrate.sh to reduce file size
 # Functions: probe_single_agent, probe_discover, grasp_define, tangle_develop, ink_deliver
@@ -5134,8 +5136,8 @@ $(tangle_decomposition_json_contract_guidance)"
             _result_file=$(find "${RESULTS_DIR:-${HOME}/.claude-octopus/results}" -maxdepth 1 -type f -name "*-${task_ids[$i]}.md" 2>/dev/null | head -1 || true)
             if [[ -n "$_result_file" ]]; then
                 local _latest_status=""
-                _latest_status=$(grep '^## Status:' "$_result_file" 2>/dev/null | tail -1 || true)
-                if [[ "$_latest_status" == *SUCCESS* ]]; then
+                _latest_status=$(octo_result_launcher_status "$_result_file" 2>/dev/null || true)
+                if [[ "$_latest_status" == "## Status: SUCCESS"* ]]; then
                     mkdir -p "$_done_dir" 2>/dev/null || true
                     echo "0" > "$_done_file" 2>/dev/null || true
                     log INFO "Reconciled late successful result for ${task_ids[$i]} before quality gate"

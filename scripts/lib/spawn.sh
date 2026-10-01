@@ -1420,22 +1420,14 @@ ${heuristic_ctx}"
             log "INFO" "Auth retries used: $auth_attempt/$max_auth_retries (backend=$OCTOPUS_BACKEND, exit=$exit_code)"
         fi
 
-        # v8.32: Skip CLI output capture if SubagentStop hook already wrote the result
-        local _hook_captured=false
-        if [[ "$SUPPORTS_HOOK_LAST_MESSAGE" == "true" ]] && grep -q "Capture: SubagentStop hook" "$result_file" 2>/dev/null; then
-            _hook_captured=true
-            log "DEBUG" "Result already captured by SubagentStop hook, skipping CLI output parse"
-        fi
-
         local _octo_success_status="ok"
         local _octo_success_reason=""
         local _octo_tokens_out=0
 
         # v7.19.0 P0.1: Process output regardless of exit code (preserves partial results)
-        if [[ "$_hook_captured" == "true" ]]; then
-            # Hook already wrote ## Output + ## Status: SUCCESS — skip to post-processing
-            _octo_tokens_out=$(octo_estimate_tokens_for_file "$result_file" 2>/dev/null || echo 0)
-        elif [[ $exit_code -eq 0 ]]; then
+        # Agent Teams hooks own native instruction files. This supervised CLI
+        # owns its Output and terminal status even if the prompt quotes a hook.
+        if [[ $exit_code -eq 0 ]]; then
             # Filter out CLI header noise and extract actual response
             # v9.3.1: Check for CLI header separator before filtering — codex exec
             # sends clean response on stdout (no header), banner on stderr.
@@ -1503,7 +1495,9 @@ ${heuristic_ctx}"
                 if [[ -n "$usage_block" ]]; then
                     echo "" >> "$result_file"
                     echo "## Native Metrics" >> "$result_file"
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=metrics:nonce=${_untrusted_nonce} -->" >> "$result_file"
                     echo "$usage_block" >> "$result_file"
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=metrics:nonce=${_untrusted_nonce} -->" >> "$result_file"
                 fi
             fi
 
@@ -1813,9 +1807,11 @@ ${heuristic_ctx}"
             # Result file is suspiciously small but raw output exists - append raw output
             echo "" >> "$result_file"
             echo "## Raw Output (filter may have removed valid content)" >> "$result_file"
+            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=raw:nonce=${_untrusted_nonce} -->" >> "$result_file"
             echo '```' >> "$result_file"
             cat "$raw_output" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=raw:nonce=${_untrusted_nonce} -->" >> "$result_file"
         fi
 
         # Cleanup temp files (keep raw_output for debugging if result is empty)

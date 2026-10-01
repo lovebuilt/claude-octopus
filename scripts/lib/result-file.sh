@@ -23,6 +23,7 @@ write_agent_result_prompt() {
 octo_result_framed_sections() {
     local result_file="$1" mode="${2:-output}"
     LC_ALL=C awk -v mode="$mode" '
+        BEGIN { status_mode=(mode == "status" || mode == "launcher-status") }
         function append(value, line) { return value (value == "" ? "" : "\n") line }
         function own_header(line) {
             return line ~ /^## (Status|Contract Status):/ ||
@@ -70,10 +71,10 @@ octo_result_framed_sections() {
         !seen_output && /^## Output$/ { expect_output=0; seen_output=1; section="output"; next }
         section == "output" && end_marker != "" {
             if ($0 == end_marker) { nonce_closed=1; output_done=1; section=""; next }
-            if (mode != "status") output=append(output, $0)
+            if (!status_mode) output=append(output, $0)
             next
         }
-        mode == "status" && section == "output" && end_marker == "" {
+        status_mode && section == "output" && end_marker == "" {
             if (!output_fence && !output_done && $0 == "```") { output_fence=1; next }
             if (output_fence) {
                 if ($0 == "```") { output_fence=0; output_done=1; section="" }
@@ -84,17 +85,24 @@ octo_result_framed_sections() {
         }
         stderr_end != "" {
             if ($0 == stderr_end) { stderr_end=""; section=""; next }
-            if (mode != "status" && section == "error") errors=append(errors, $0)
+            if (!status_mode && section == "error") errors=append(errors, $0)
             next
         }
-        section != "output" && /^<!-- BEGIN-UNTRUSTED:.*:stream=stderr:/ {
-            if (!nonce_closed || $0 != stderr_begin) { invalid=1; exit }
+        section != "output" && /^<!-- BEGIN-UNTRUSTED:.*:stream=/ {
+            stream=$0
+            sub(/^.*:stream=/, "", stream)
+            sub(/:nonce=.*$/, "", stream)
+            expected_begin=stderr_begin
+            sub(/:stream=stderr:/, ":stream=" stream ":", expected_begin)
+            if (!nonce_closed || $0 != expected_begin || stream !~ /^(stderr|metrics|raw)$/) { invalid=1; exit }
             stderr_pending=0
+            metrics_pending=0
+            raw_pending=0
             stderr_end=$0
             sub(/BEGIN-UNTRUSTED/, "END-UNTRUSTED", stderr_end)
             next
         }
-        mode == "status" && seen_output && section != "output" {
+        status_mode && seen_output && section != "output" {
             if (stderr_fence) {
                 if ($0 == "```") { stderr_fence=0; section="" }
                 next
@@ -103,8 +111,24 @@ octo_result_framed_sections() {
                 if ($0 == "```") { stderr_fence=1; stderr_pending=0 }
                 next
             }
+            if (metrics_open) {
+                if ($0 ~ /<\/usage>/) metrics_open=0
+                next
+            }
+            if (metrics_pending) {
+                if ($0 ~ /<usage>/) { metrics_open=($0 !~ /<\/usage>/); metrics_pending=0 }
+                next
+            }
+            if (raw_pending) {
+                if ($0 == "```") { stderr_fence=1; raw_pending=0 }
+                next
+            }
+            if ($0 == "## Native Metrics") { metrics_pending=1; next }
+            if ($0 ~ /^## Raw Output/) { raw_pending=1; next }
             if ($0 ~ /^## (Error Log|Warnings\/Errors|Errors)$/) { stderr_pending=1; next }
-            if (status == "" && output_done && $0 ~ /^## Status: (SUCCESS|FAILED|TIMEOUT)([[:space:](]|$)/) status=$0
+            if (status == "" && output_done &&
+                ($0 ~ /^## Status: (SUCCESS|FAILED|TIMEOUT)([[:space:](]|$)/ ||
+                 (mode == "launcher-status" && $0 ~ /^## Status: (STALLED|CANCELLED|ERROR)([[:space:](]|$)/))) status=$0
             next
         }
         section == "output" && own_header($0) { section="" }
@@ -116,8 +140,8 @@ octo_result_framed_sections() {
             if (invalid) exit 1
             if (!framed) exit 2
             if (invalid || remaining != 0 || !started || !seen_output || (end_marker != "" && !nonce_closed)) exit 1
-            if (mode == "status") {
-                if (!output_done || output_fence || stderr_fence || stderr_pending || stderr_end != "" || status == "") exit 1
+            if (status_mode) {
+                if (!output_done || output_fence || stderr_fence || stderr_pending || metrics_pending || metrics_open || raw_pending || stderr_end != "" || status == "") exit 1
                 print status
             } else if (mode == "failure") {
                 if (prompt != "") print prompt
@@ -132,5 +156,18 @@ octo_result_framed_sections() {
                 for (i=1; i<=n; i++) if (lines[i] !~ /^```(json|JSON)?$/) print lines[i]
             }
         }
+    ' "$result_file" 2>/dev/null
+}
+
+# Current artifacts use launcher boundaries. Legacy artifacts retain last-status
+# selection so appended retries and historical result files keep their behavior.
+octo_result_launcher_status() {
+    local result_file="$1" framed_rc=0
+    [[ -f "$result_file" ]] || return 1
+    octo_result_framed_sections "$result_file" launcher-status && return 0 || framed_rc=$?
+    [[ "$framed_rc" -eq 2 ]] || return 1
+    awk '
+        /^## Status: / { status=$0 }
+        END { if (status != "") print status; else exit 1 }
     ' "$result_file" 2>/dev/null
 }
