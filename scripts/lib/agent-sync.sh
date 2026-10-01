@@ -1271,6 +1271,10 @@ octopus_sync_timeout_override() {
     local phase="${2:-}"
     local explicit_secs="${OCTOPUS_TIMEOUT_EXPLICIT_SECS:-}"
 
+    # Council owns a resolved run-wide budget, including its outer watchdog.
+    # Neither a global environment override nor --timeout may replace that cap.
+    [[ "$phase" == "council" ]] && return 1
+
     # Normalize leading zeroes so --timeout 0600 means 600 rather than being
     # ignored, and so the value is never read as octal later.
     while [[ "${#explicit_secs}" -gt 1 && "${explicit_secs#0}" != "$explicit_secs" ]]; do
@@ -1301,7 +1305,7 @@ run_agent_sync() {
     local _timeout_override
     if _timeout_override="$(octopus_sync_timeout_override "$timeout_secs" "$phase")"; then
         timeout_secs="$_timeout_override"
-    elif [[ "$timeout_secs" -eq 120 ]]; then
+    elif [[ "$phase" != "council" && "$timeout_secs" -eq 120 ]]; then
         # v8.19.0: Dynamic timeout calculation (when caller uses default 120)
         local task_type_for_timeout
         task_type_for_timeout=$(classify_task "$prompt" 2>/dev/null) || task_type_for_timeout="standard"

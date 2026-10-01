@@ -36,7 +36,7 @@ attempt=0
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >> "$FIXTURE_CALLS"
 case "$FIXTURE_SCENARIO" in
-    success|kimi-success) printf '%s\n' 'Substantive provider result.' ;;
+    success|kimi-success|council-global-budget|council-default-budget) printf '%s\n' 'Substantive provider result.' ;;
     exact-seat)
         cat > "$FIXTURE_ROOT/received-prompt"
         printf '%s\n' 'Substantive provider result.'
@@ -145,7 +145,7 @@ get_agent_command() {
     printf '%s\n' "$fixture_provider --model $command_model"
 }
 build_provider_env() { PROVIDER_ENV_ARRAY=(); }
-run_with_timeout() { shift; "$@"; }
+run_with_timeout() { printf '%s\n' "$1" > "$FIXTURE_ROOT/timeout-seconds"; shift; "$@"; }
 stop_quota_watcher() { :; }
 update_agent_status() { :; }
 octo_estimate_tokens_for_file() { printf '%s\n' 0; }
@@ -175,7 +175,7 @@ export CODEX_SUBAGENT_PREAMBLE=""
 
 run_fixture() {
     local scenario="$1" agent_type="${2:-codex}"
-    local role="reviewer" phase="probe"
+    local role="reviewer" phase="${3:-probe}" timeout_secs="${4:-5}"
     if [[ "$scenario" == exact-seat ]]; then
         role="implementation-verifier"
         phase="review"
@@ -194,7 +194,7 @@ run_fixture() {
     mkdir -p "$RESULTS_DIR"
 
     set +e
-    run_agent_sync "$agent_type" 'Review the fixture.' 5 "$role" "$phase" \
+    run_agent_sync "$agent_type" 'Review the fixture.' "$timeout_secs" "$role" "$phase" \
         > "$FIXTURE_ROOT/stdout" 2> "$FIXTURE_ROOT/stderr"
     fixture_rc=$?
     set -e
@@ -237,6 +237,25 @@ assert_scenario() {
         test_fail "rc=$(cat "$root/rc") calls=$actual_calls transitions=${actual_transitions:-missing} terminal=${actual_terminal:-missing} contribution=${actual_contribution:-missing} reason=${actual_reason:-missing}"
     fi
 }
+
+test_case "council sync dispatch preserves its caller budget against a global override"
+OCTOPUS_AGENT_TIMEOUT=600 run_fixture council-global-budget codex council 60
+if [[ "$fixture_rc" -eq 0 && "$(cat "$FIXTURE_ROOT/timeout-seconds")" == "60" ]]; then
+    test_pass
+else
+    test_fail "council dispatch rc=$fixture_rc timeout=$(cat "$FIXTURE_ROOT/timeout-seconds" 2>/dev/null || echo missing), expected success with 60s"
+fi
+
+test_case "council sync dispatch keeps an explicit 120s budget instead of recalculating it"
+compute_dynamic_timeout() { printf '600\n'; }
+unset OCTOPUS_AGENT_TIMEOUT
+run_fixture council-default-budget codex council 120
+if [[ "$fixture_rc" -eq 0 && "$(cat "$FIXTURE_ROOT/timeout-seconds")" == "120" ]]; then
+    test_pass
+else
+    test_fail "council dispatch rc=$fixture_rc timeout=$(cat "$FIXTURE_ROOT/timeout-seconds" 2>/dev/null || echo missing), expected success with 120s"
+fi
+unset -f compute_dynamic_timeout
 
 assert_scenario success 0 1 \
     planned,starting,authenticated,running,output_received,validated,contributed \

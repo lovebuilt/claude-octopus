@@ -234,6 +234,104 @@ test_fallback_reuses_completed_response_after_deadline() {
     if [[ "$result" == "true:strategy-analyst" ]]; then test_pass; else test_fail "reuse=$result"; fi
 }
 
+test_later_phases_bound_preparation_and_cancel_children() {
+    test_case "critique, revision and synthesis bound preparation and cancel the full tree"
+    local phase
+    for phase in cross-critique revision-after-critique chair-synthesis; do
+        if ! (
+            council_reset_defaults
+            COUNCIL_RUN_DIR="$TEST_TMP_DIR/preparation-$phase"
+            mkdir -p "$COUNCIL_RUN_DIR/responses" "$COUNCIL_RUN_DIR/critiques" "$COUNCIL_RUN_DIR/revisions"
+            COUNCIL_ROSTER_JSON='[{"persona":"strategy-analyst","provider":"codex","agent_spec":"codex","seat":"chair"}]'
+            COUNCIL_DEPTH=deep
+            COUNCIL_RUN_START_EPOCH="$(date +%s)"
+            OCTOPUS_COUNCIL_DEADLINE_SECS=2
+            OCTOPUS_COUNCIL_DEADLINE_SEAT_FLOOR_SECS=1
+            OCTOPUS_COUNCIL_REAP_GRACE_SECS=0
+            OCTOPUS_COUNCIL_TIMEOUT_CODEX=1
+            OCTOPUS_COUNCIL_SYNTHESIS_TIMEOUT=1
+            unset OCTOPUS_COUNCIL_DETACH
+            council_prompt_for_member() {
+                (sleep 3; touch "$COUNCIL_RUN_DIR/child-finished") &
+                printf '%s\n' "$!" > "$COUNCIL_RUN_DIR/child.pid"
+                sh -c 'echo "$PPID"' > "$COUNCIL_RUN_DIR/preparation.pid"
+                sleep 3
+                printf 'prepared prompt'
+            }
+            council_live_response() { printf '# late provider answer\n'; }
+            start="$(python3 -c 'import time; print(time.monotonic())')"
+            case "$phase" in
+                cross-critique) council_run_critique_phase ;;
+                revision-after-critique) council_run_revision_phase ;;
+                chair-synthesis) council_write_synthesis || true ;;
+            esac
+            elapsed="$(python3 -c 'import sys,time; print(time.monotonic()-float(sys.argv[1]))' "$start")"
+            python3 -c 'import sys; assert float(sys.argv[1]) < 2.5' "$elapsed" || exit 1
+            [[ "$COUNCIL_LAST_DISPATCH_TIMEOUT_PROVENANCE" == internal-watchdog && "$COUNCIL_DEADLINE_HIT" == true ]] || exit 1
+            sleep 3.2
+            [[ ! -e "$COUNCIL_RUN_DIR/child-finished" ]] || exit 1
+            [[ -s "$COUNCIL_RUN_DIR/child.pid" && -s "$COUNCIL_RUN_DIR/preparation.pid" ]] || exit 1
+            ! kill -0 "$(cat "$COUNCIL_RUN_DIR/child.pid")" 2>/dev/null || exit 1
+            ! kill -0 "$(cat "$COUNCIL_RUN_DIR/preparation.pid")" 2>/dev/null || exit 1
+            ! grep -rq 'late provider answer' "$COUNCIL_RUN_DIR" || exit 1
+            [[ -z "$(find "$COUNCIL_RUN_DIR" -name '*.partial' -o -name '*.done' -o -name '*.done.tmp')" ]] || exit 1
+        ); then
+            test_fail "$phase exceeded its budget or left a child/late publication"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_synthesis_watchdog_uses_chair_budget() {
+    test_case "the synthesis watchdog uses its chair budget rather than the advice budget"
+    if (
+        council_reset_defaults
+        COUNCIL_RUN_DIR="$TEST_TMP_DIR/synthesis-budget"
+        mkdir -p "$COUNCIL_RUN_DIR"
+        COUNCIL_ROSTER_JSON='[{"persona":"strategy-analyst","provider":"codex","agent_spec":"codex","seat":"chair"}]'
+        COUNCIL_RUN_START_EPOCH="$(date +%s)"
+        OCTOPUS_COUNCIL_DEADLINE_SECS=10
+        OCTOPUS_COUNCIL_DEADLINE_SEAT_FLOOR_SECS=1
+        OCTOPUS_COUNCIL_REAP_GRACE_SECS=0
+        OCTOPUS_COUNCIL_TIMEOUT_CODEX=1
+        OCTOPUS_COUNCIL_SYNTHESIS_TIMEOUT=3
+        unset OCTOPUS_COUNCIL_DETACH
+        council_prompt_for_member() { sleep 1.3; printf 'prepared prompt'; }
+        council_live_response() { printf '# completed chair answer\n'; }
+        council_write_synthesis && grep -q 'completed chair answer' "$COUNCIL_RUN_DIR/synthesis.md"
+    ); then test_pass; else test_fail "chair synthesis was stopped at the shorter advice timeout"; fi
+}
+
+test_synthesis_expiry_publishes_reported_partial() {
+    test_case "aggregate expiry during synthesis reports a partial with deadline provenance"
+    if (
+        pool="$TEST_TMP_DIR/synthesis-partial"
+        OCTOPUS_COUNCIL_DEADLINE_SECS=5
+        OCTOPUS_COUNCIL_DEADLINE_SEAT_FLOOR_SECS=1
+        OCTOPUS_COUNCIL_REAP_GRACE_SECS=0
+        OCTOPUS_COUNCIL_AGENT_TIMEOUT=1
+        OCTOPUS_COUNCIL_SYNTHESIS_TIMEOUT=1
+        unset OCTOPUS_COUNCIL_DETACH
+        council_run_advice_phase() {
+            COUNCIL_FIXTURE=""
+            COUNCIL_QUORUM_MET=true
+            COUNCIL_CHAIR_RESPONSE_RECEIVED=true
+            COUNCIL_CHAIR_HOST_NATIVE=false
+            COUNCIL_RUN_START_EPOCH=$(( $(date +%s) - 3 ))
+        }
+        council_prompt_for_member() { sleep 3; printf 'prepared prompt'; }
+        council_live_response() { printf '# late provider answer\n'; }
+        rc=0
+        OCTOPUS_COUNCIL_FIXTURE=full-success \
+            OCTOPUS_COUNCIL_PROVIDER_FIXTURE='claude:available,codex:available,agy:available' \
+            council_run --goal review --depth quick --benchmark off --output-dir "$pool" 'Review fixture' \
+                > "$TEST_TMP_DIR/synthesis-partial.out" 2>&1 || rc=$?
+        [[ "$rc" -ne 0 ]] && jq -e '.status == "partial" and .deadline.hit == true' "$COUNCIL_RUN_DIR/summary.json" >/dev/null \
+            && jq -e '.state == "finished" and .status == "partial"' "$COUNCIL_RUN_DIR/run-status.json" >/dev/null
+    ); then test_pass; else test_fail "synthesis expiry was not reported as an aggregate-deadline partial"; fi
+}
+
 test_deadline_secs_default
 test_deadline_secs_rejects_junk
 test_deadline_remaining_sentinel_when_inactive
@@ -244,5 +342,8 @@ test_summary_carries_provenance
 test_deadline_hit_finalizes_reported_partial
 test_fallback_rechecks_deadline
 test_fallback_reuses_completed_response_after_deadline
+test_later_phases_bound_preparation_and_cancel_children
+test_synthesis_watchdog_uses_chair_budget
+test_synthesis_expiry_publishes_reported_partial
 
 test_summary

@@ -1909,6 +1909,16 @@ council_dispatch_member_detached() {
         return $?
     fi
 
+    # Resolve the watchdog before starting preparation. Synthesis has its own
+    # caller-owned timeout; advice, critique and revision use the seat timeout.
+    local seat_provider timeout_secs
+    seat_provider="$(jq -r '.agent_spec // .provider // ""' <<< "$member_json")"
+    if [[ "$phase" == "chair-synthesis" ]]; then
+        timeout_secs="$(council_synthesis_timeout "$seat_provider")"
+    else
+        timeout_secs="$(council_seat_timeout "$seat_provider")"
+    fi
+
     (
         trap '' HUP INT TERM
         trap 'exit 143' USR1
@@ -1938,9 +1948,6 @@ council_dispatch_member_detached() {
     # the subshell terminates on its own; this poll is a safety net keyed to the same
     # timeout plus a grace margin for the mv+sentinel write. Poll the .done sentinel
     # at a fine interval so fixture-fast seats do not each cost a full second.
-    local seat_provider timeout_secs
-    seat_provider="$(jq -r '.provider // ""' <<< "$member_json")"
-    timeout_secs="$(council_seat_timeout "$seat_provider")"
     # Grace margin for the mv+sentinel write after the provider timeout fires.
     # Configurable so tests can force the timeout path deterministically. Use the
     # shared resolver so this consumer and the aggregate-budget clamp normalize the
@@ -1983,6 +1990,7 @@ council_dispatch_member_detached() {
         rm -f "$output_path"
     fi
     rm -f "$done_file" "${done_file}.tmp" "$partial"
+    if council_deadline_exceeded; then COUNCIL_DEADLINE_HIT="true"; fi
     return "$rc"
 }
 
@@ -3083,7 +3091,7 @@ council_run_critique_phase() {
         persona="$(jq -r '.persona' <<< "$member")"
         slug="$(council_slug "$persona")"
         output_path="${COUNCIL_RUN_DIR}/critiques/$(printf '%02d' "$index")-${slug}.md"
-        council_dispatch_member "$member" "cross-critique" > "$output_path" || rm -f "$output_path"
+        council_dispatch_member_detached "$member" "cross-critique" "$output_path" || rm -f "$output_path"
         index=$((index + 1))
     done < <(jq -c '.[]' <<< "$COUNCIL_ROSTER_JSON")
 }
@@ -3100,7 +3108,7 @@ council_run_revision_phase() {
         persona="$(jq -r '.persona' <<< "$member")"
         slug="$(council_slug "$persona")"
         output_path="${COUNCIL_RUN_DIR}/revisions/$(printf '%02d' "$index")-${slug}.md"
-        if council_dispatch_member "$member" "revision-after-critique" > "$output_path"; then
+        if council_dispatch_member_detached "$member" "revision-after-critique" "$output_path"; then
             :
         else
             rm -f "$output_path"
@@ -3134,7 +3142,7 @@ council_write_synthesis() {
     local chair_member=""
 
     chair_member="$(council_chair_member_json || true)"
-    if [[ -n "$chair_member" ]] && council_dispatch_member "$chair_member" "chair-synthesis" > "$temp_path" && [[ -s "$temp_path" ]]; then
+    if [[ -n "$chair_member" ]] && council_dispatch_member_detached "$chair_member" "chair-synthesis" "$temp_path" && [[ -s "$temp_path" ]]; then
         if grep -q '^#' "$temp_path"; then
             mv "$temp_path" "$synthesis_path"
         else
