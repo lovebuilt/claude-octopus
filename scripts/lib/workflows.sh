@@ -1964,7 +1964,7 @@ tangle_decomposition_wire_output_usable() {
 
 
 tangle_decomposition_json_contract_guidance() {
-    cat <<'EOF'
+    octo_protect_json_contract "$(cat <<'EOF'
 Return ONLY JSON matching Tangle decomposition schema v1. No Markdown fences, headings, or prose.
 Shape:
 {"schema_version":1,"subtasks":[{"id":1,"kind":"coding","title":"Short title","reads":[],"files":["relative/file.js"],"creates":[],"task":"Specific coding work"}]}
@@ -1980,6 +1980,7 @@ Rules:
 - reads is read-only context and never grants write permission.
 - include at least one coding subtask and preserve the original deliverable.
 EOF
+)"
 }
 
 tangle_decomposition_json_payload() {
@@ -2283,7 +2284,7 @@ ${previous_output}"
 }
 
 tangle_adequacy_json_contract_guidance() {
-    cat <<'EOF'
+    octo_protect_json_contract "$(cat <<'EOF'
 Return ONLY JSON matching Tangle adequacy schema v1:
 {"schema_version":1,"verdict":"pass|fail","reasons":["..."],"scope_review":[{"action":"move_to_reads|remove_write|add_write","path":"repo/relative/path","reason":"..."}]}
 Rules:
@@ -2292,6 +2293,7 @@ Rules:
 - path is one concrete repository-relative path; no globs or prose.
 - do not emit Markdown, prose before/after JSON, or legacy VERDICT:/REASONS:/SCOPE_REVIEW: text.
 EOF
+)"
 }
 
 tangle_adequacy_json_output_usable() {
@@ -2365,7 +2367,7 @@ ${subtasks}"
 }
 
 tangle_reconsideration_json_contract_guidance() {
-    cat <<'EOF'
+    octo_protect_json_contract "$(cat <<'EOF'
 Return ONLY JSON matching Tangle reconsideration schema v1:
 {"schema_version":1,"decisions":[{"action":"move_to_reads|remove_write|add_write","path":"repo/relative/path","decision":"accept|reject","reason":"..."}],"decomposition":{"schema_version":1,"subtasks":[{"id":1,"kind":"coding","title":"Short title","reads":[],"files":["relative/file.js"],"creates":[],"task":"Specific coding work"}]}}
 Rules:
@@ -2378,6 +2380,7 @@ EOF
 - preserve the original deliverable and keep coding scopes disjoint.
 - do not emit Markdown, prose before/after JSON, DECISIONS:/DECOMPOSITION: text, or globs.
 EOF
+)"
 }
 
 tangle_reconsideration_expected_scope_review_json() {
