@@ -598,6 +598,38 @@ test_council_research_first_writes_artifact_and_prompt_context() {
     fi
 }
 
+test_council_research_first_rejects_symlinked_corpus_paths() {
+    test_case "Council research-first rejects symlinked corpus files and directories"
+    load_council_lib || return 1
+
+    local tmp_dir corpus_root secret research
+    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-research-symlink.XXXXXX")"
+    corpus_root="$tmp_dir/corpus"
+    secret="$tmp_dir/secret.env"
+    mkdir -p "$corpus_root/graphify-out" "$corpus_root/real-knowledge"
+    printf 'OCTOPUS_VALIDATION_SECRET=must-not-leak\n' > "$secret"
+    printf 'OCTOPUS_DIRECTORY_SECRET=must-not-leak\n' > "$corpus_root/real-knowledge/secret.md"
+    ln -s "$secret" "$corpus_root/graphify-out/GRAPH_REPORT.md"
+    ln -s "$corpus_root/real-knowledge" "$corpus_root/03_knowledge_base"
+
+    COUNCIL_RESEARCH_FIRST=true
+    COUNCIL_RUN_DIR="$tmp_dir/run"
+    COUNCIL_TASK="Review repository evidence"
+    COUNCIL_CORPUS_ROOT="$corpus_root"
+    mkdir -p "$COUNCIL_RUN_DIR"
+    council_write_research_artifact
+    research="$COUNCIL_RUN_DIR/research.md"
+
+    if [[ -f "$research" ]] &&
+       ! grep -q 'must-not-leak' "$research" &&
+       ! grep -q 'secret.env' "$research"; then
+        test_pass
+    else
+        test_fail "research artifact followed a repository-controlled symlink"
+        return 1
+    fi
+}
+
 test_council_corpus_append_writes_durable_entry() {
     test_case "Council corpus append writes durable entry"
     load_council_lib || return 1
@@ -2189,6 +2221,7 @@ test_council_help_shows_simulation_research_and_corpus_flags
 test_council_summary_records_execution_and_corpus_modes
 test_council_corpus_require_rejects_missing_workspace
 test_council_research_first_writes_artifact_and_prompt_context
+test_council_research_first_rejects_symlinked_corpus_paths
 test_council_corpus_append_writes_durable_entry
 test_council_pass_parser_accepts_variants
 test_council_fixture_run_writes_phase_artifacts
