@@ -271,6 +271,7 @@ probe_synthesis_repair() {
 
 Fix every listed finding and keep all other content, structure and headings. Do not add new claims.
 - missing_citation: the line makes a claim without a valid citation. Add a catalog ID as [source:S001], cite a workspace-relative path with line numbers (src/app.ts:42, src/app.ts:40-48 or src/app.ts:12,40), or mark the claim [inference]. A bare :42, a basename that is not a workspace path, or a path elided after its first mention is not a citation: repeat the full path on every line that cites it.
+- unresolved_local_citation: replace the named citation with a full workspace-relative path and valid line numbers, or remove it.
 - unknown_source: the cited ID is not in the evidence catalog. Replace it with a catalog ID, a workspace citation, or [inference].
 - number_mismatch or quote_mismatch: the number or quote does not appear in the cited source or the cited lines. Re-read the file and correct the line range, correct the number or quote, or remove it. Double quotation marks are only for exact text from a cited source: write a proposed string, label or paraphrase without them, or in backticks when it is a literal value.
 - false_consensus: the line calls something consensus without two independent evidence groups. Reword it or cite a second independent source.
@@ -288,7 +289,17 @@ ${numbered_draft}"
 
     repaired=$(run_agent_sync "$agent" "$repair_prompt" "${TIMEOUT:-300}" "synthesizer" "probe") || return 1
     [[ -n "${repaired//[[:space:]]/}" ]] || return 1
-    probe_synthesis_unwrap_repair "$repaired" > "$draft_file"
+    local normalized
+    normalized=$(mktemp "${draft_file}.repair.XXXXXX") || return 1
+    if ! probe_synthesis_unwrap_repair "$repaired" > "$normalized" \
+       || ! grep -q '[^[:space:]]' "$normalized"; then
+        rm -f "$normalized"
+        return 1
+    fi
+    if ! mv "$normalized" "$draft_file"; then
+        rm -f "$normalized"
+        return 1
+    fi
 }
 
 # The verifier skips fenced blocks, so a repair returned inside one outer
@@ -301,7 +312,25 @@ probe_synthesis_unwrap_repair() {
             first = 1; last = NR
             while (first <= last && lines[first] ~ /^[[:space:]]*$/) first++
             while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
-            if (first < last && lines[first] ~ /^```/ && lines[last] ~ /^```[[:space:]]*$/) { first++; last-- }
+            opener = lines[first]
+            sub(/^ ? ? ?/, "", opener)
+            if (first < last && match(opener, /^`+|^~+/) && RLENGTH >= 3) {
+                marker = substr(opener, 1, 1); size = RLENGTH
+                suffix = substr(opener, size + 1); closer = 0
+                if (marker != "`" || suffix !~ /`/) {
+                    for (i = first + 1; i <= last; i++) {
+                        closing = lines[i]; sub(/^ ? ? ?/, "", closing)
+                        if (substr(closing, 1, 1) != marker) continue
+                        if (match(closing, /^`+|^~+/) && RLENGTH >= size \
+                            && substr(closing, RLENGTH + 1) ~ /^[[:space:]]*$/) {
+                            closer = i
+                            break
+                        }
+                    }
+                }
+                if (closer == 0) exit 1
+                if (closer == last) { first++; last-- }
+            }
             for (i = first; i <= last; i++) print lines[i]
         }'
 }

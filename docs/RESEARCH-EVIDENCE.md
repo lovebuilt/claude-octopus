@@ -49,6 +49,22 @@ The verifier fails closed for unknown source IDs, unsupported consensus claims, 
 
 Digits that belong to an identifier are not numeric claims: a ticket or requirement ID such as `PLAT-1181`, `T-1` or `R2`, a reference such as `#1728` or `§4.2`, a name such as `p95` or `k8s`, and a git SHA such as `89a941fda`. Standalone numbers, percentages, decimals, numbers with a unit suffix such as `15m` or `5xx`, and ranges such as `10-13` are still checked.
 
+When a probe synthesis fails verification, its synthesizer gets one repair
+pass with the findings, evidence catalog and numbered draft. Missing citations,
+unresolved workspace paths, unknown source IDs, unsupported consensus, number
+mismatches and quote mismatches qualify for repair. Cache and normalization
+failures do not. The corrected draft must pass verification before publication.
+A failed repair blocks publication, and the run does not ask for another.
+
+A repair may return the draft inside one complete Markdown code fence. The
+repair step removes that wrapper and echoed line numbers before verification.
+It rejects empty text and an unmatched opening fence. Separate code blocks keep
+their fences so the verifier still checks claims between them.
+
+When every synthesizer fails, the run writes a compact fallback with source
+counts and the original question. It does not cache that fallback or request a
+repair, so a later retry can produce a new synthesis.
+
 ## Workspace citations
 
 Research about the codebase itself cites files, not web pages. A claim may cite a file in the workspace as a workspace-relative path with line numbers: `src/app.ts:42`, `src/app.ts:40-48`, or `src/app.ts:12,40`. An absolute path inside the workspace also works. The workspace root is the directory the providers read (`PROJECT_ROOT`), recorded in the manifest when the run starts, so a later `research-verify` or `research-resume` resolves the same files from any directory.

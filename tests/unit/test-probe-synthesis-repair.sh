@@ -19,12 +19,11 @@ source "$PROJECT_ROOT/scripts/lib/heuristics.sh"
 # shellcheck source=/dev/null
 source "$PROJECT_ROOT/scripts/lib/research-evidence.sh"
 
-TEST_ROOT="$(mktemp -d)"
+TEST_ROOT="$TEST_TMP_DIR/probe-synthesis-repair"
 HOME="$TEST_ROOT/home"
 RESULTS_DIR="$TEST_ROOT/results"
 LOGS_DIR="$TEST_ROOT/logs"
-OCTOPUS_RESEARCH_ROOT="$TEST_ROOT/research-runs"
-trap 'rm -rf "$TEST_ROOT"' EXIT
+export OCTOPUS_RESEARCH_ROOT="$TEST_ROOT/research-runs"
 mkdir -p "$HOME" "$RESULTS_DIR" "$LOGS_DIR" "$TEST_ROOT/workspace/src"
 WORKSPACE="$(cd "$TEST_ROOT/workspace" && pwd -P)"
 printf 'import { run } from "./run";\nexport const handler = run;\n' > "$WORKSPACE/src/app.ts"
@@ -72,9 +71,9 @@ run_scenario() {
         echo "## Status: SUCCESS"
     } > "$RESULTS_DIR/codex-probe-${task_group}-0.md"
     synthesis_file="$RESULTS_DIR/probe-synthesis-${task_group}.md"
-    OCTOPUS_RESEARCH_EVIDENCE=true
-    OCTOPUS_RESEARCH_RUN_ID="run-$name"
-    OCTOPUS_RESEARCH_RESUME=false
+    export OCTOPUS_RESEARCH_EVIDENCE=true
+    export OCTOPUS_RESEARCH_RUN_ID="run-$name"
+    export OCTOPUS_RESEARCH_RESUME=false
     research_run_begin "$task_group" "Where does the app export its handler?" "quick" >/dev/null 2>&1
     research_collect_sources "$task_group" >/dev/null 2>&1
     scenario_status=0
@@ -122,6 +121,40 @@ if [[ "$scenario_status" -ne 0 && "$agent_calls" -eq 2 && ! -f "$synthesis_file"
     test_pass
 else
     test_fail "a fenced repair bypassed verification (status=$scenario_status calls=$agent_calls)"
+fi
+
+for repair_case in empty whitespace split-fences unmatched-fence; do
+    case "$repair_case" in
+        unmatched-fence) repair_text=$'```markdown\nLatency is 503 ms.\n~~~' ;;
+        empty) repair_text=$'```markdown\n```' ;;
+        whitespace) repair_text=$'```markdown\n  \n\t\n```' ;;
+        split-fences) repair_text=$'```text\nexample\n```\nLatency is 503 ms.\n```text\nexample\n```' ;;
+    esac
+    run_scenario "$repair_case" "$ELIDED_LINE" "$repair_text"
+    test_case "the $repair_case repair cannot publish an empty or unchecked document"
+    if [[ "$scenario_status" -ne 0 && "$agent_calls" -eq 2 && ! -f "$synthesis_file" ]]; then
+        test_pass
+    else
+        test_fail "invalid repair published (status=$scenario_status calls=$agent_calls)"
+    fi
+done
+
+run_scenario "valid-fenced" "$ELIDED_LINE" $'```markdown\n1\t'"$GOOD_LINE"$'\n```'
+test_case "a valid fenced repair drops the wrapper and echoed line numbers"
+if [[ "$scenario_status" -eq 0 && "$agent_calls" -eq 2 && -f "$synthesis_file" ]] \
+   && grep -qxF "$GOOD_LINE" "$synthesis_file"; then
+    test_pass
+else
+    test_fail "a valid fenced repair did not publish its normalized text"
+fi
+
+run_scenario "unresolved" 'The app exports its handler from run (app.ts:2).' "$GOOD_LINE"
+test_case "an unresolved workspace citation reaches the repair pass"
+if [[ "$scenario_status" -eq 0 && "$agent_calls" -eq 2 && -f "$synthesis_file" ]] \
+   && grep -qF '[unresolved_local_citation]: app.ts:2' "$REPAIR_PROMPT"; then
+    test_pass
+else
+    test_fail "unresolved citation was not repaired (status=$scenario_status calls=$agent_calls)"
 fi
 
 run_scenario "clean" "$GOOD_LINE" "$GOOD_LINE"

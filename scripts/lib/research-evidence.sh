@@ -368,7 +368,7 @@ research_synthesis_repairable_findings() {
     local report="$1"
     [[ -r "$report" ]] && command -v jq >/dev/null 2>&1 || return 0
     jq -r '.checks[]
-        | select(.kind | IN("missing_citation", "unknown_source", "false_consensus", "number_mismatch", "quote_mismatch"))
+        | select(.kind | IN("missing_citation", "unresolved_local_citation", "unknown_source", "false_consensus", "number_mismatch", "quote_mismatch"))
         | "- line \(.line) [\(.kind)]: \(.detail)"' "$report" 2>/dev/null || true
 }
 
@@ -616,7 +616,7 @@ research_extract_numbers() {
     local line="$1"
     # Do not mistake ordered-list markers ("1." / "2)" / "**3.**") for
     # factual values.
-    line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*([-*+][[:space:]]*)?(\*\*|__|\*|_)?[0-9]+[.)](\*\*|__|\*|_)?[[:space:]]*//')
+    line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*([-*+][[:space:]]*)?(\*\*|__|\*|_)?[0-9]+[.)](\*\*|__|\*|_)?[[:space:]]+//')
     printf '%s\n' "$line" | research_numeric_claims | sort -u || true
 }
 

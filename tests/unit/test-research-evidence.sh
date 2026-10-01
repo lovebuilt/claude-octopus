@@ -619,6 +619,19 @@ else
     test_fail "emphasized list markers were checked as numbers, or an emphasized value escaped: $marker_kinds"
 fi
 
+test_case "an emphasized decimal remains a complete numeric claim"
+printf 'Availability is 5%%.\n' > "$local_root/src/availability.txt"
+printf '%s\n' '**503.5%** availability (`src/availability.txt:1`).' > "$marker_draft"
+marker_status=0
+research_verify_synthesis "$marker_draft" || marker_status=$?
+if [[ "$marker_status" -ne 0 ]] \
+   && jq -e '.checks | any(.kind == "number_mismatch" and .detail == "503.5%")' \
+       "$RESEARCH_RUN_DIR/verification.json" >/dev/null; then
+    test_pass
+else
+    test_fail "an emphasized decimal escaped evidence verification"
+fi
+
 test_case "workspace citations to files over the size cap fail closed"
 big_line='  return { status: 500 };'
 { printf '%s\n' "$big_line"; head -c 400 /dev/zero | tr '\0' 'x'; printf '\n'; } > "$local_root/src/big.ts"
@@ -733,6 +746,7 @@ done <<'EOF'
 - **The groundwork is on `main` at `89a941fda`.** That covers:
   - p50/p95 latency pages;
 - Both `a6538e52e` pins contain `d34478150`; PLAT-1181, #1728 and DoD-2 track them.
+- abc123-456-789 is an identifier.
 - ALR-R4(c) and §4.2-4.3 cover the k8s c3po_fleet monitors in us-east-1 on claude-opus-5-5 (v11.9.6).
 EOF
 claim_numbers=$(research_extract_numbers \

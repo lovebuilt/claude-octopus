@@ -38,16 +38,19 @@
 - A probe synthesis that fails mechanical evidence verification now gets one
   repair pass before publication is blocked. The synthesizer that wrote the
   draft receives the verifier's repairable findings (missing or elided
-  citations, unknown sources, false consensus, number and quote mismatches),
+  citations, unresolved workspace paths, unknown sources, false consensus,
+  number and quote mismatches),
   the evidence catalog and the numbered draft, and the corrected draft is
   verified again. Previously one citation-format slip, such as `:42` in place
   of `src/app.ts:42`, discarded a usable synthesis and failed the probe. A
   repair returned inside a code fence is unwrapped first, since the verifier
-  skips fenced text.
+  skips fenced text. Empty repairs and unmatched outer fences are rejected,
+  and separate code blocks cannot hide claims between them.
 - Evidence verification no longer checks an emphasized ordered-list marker,
   such as `**4.` or `__2.`, as a cited number. Plain `1.` and `2)` markers
   were already skipped, so a synthesis that bolded its numbered findings
   failed with a `number_mismatch` for each marker on a line with citations.
+  Emphasized decimal values such as `**503.5%**` remain complete claims.
 - A probe whose synthesizer fails no longer caches the compact fallback. The
   stub carries no findings, and caching it served the same empty synthesis to
   every retry of that prompt for the cache TTL, so re-running Discover after
