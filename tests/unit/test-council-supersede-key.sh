@@ -124,6 +124,126 @@ test_summary_carries_supersede_key() {
     fi
 }
 
+test_delayed_older_scanner_keeps_newest() {
+    test_case "a delayed older supersession scan cannot supersede the newer run"
+    local pool old newer slug
+    pool="$(mktemp -d "$TEST_TMP_DIR/pool-delayed.XXXXXX")"
+    old="$pool/20261001-100000-000001"; newer="$pool/20261001-100000-000002"
+    mkdir -p "$old" "$newer"
+    COUNCIL_SUPERSEDE_KEY="gate"
+    COUNCIL_RUN_DIR="$old"; COUNCIL_RUN_ID="${old##*/}"
+    council_write_run_status running
+    COUNCIL_RUN_DIR="$newer"; COUNCIL_RUN_ID="${newer##*/}"
+    council_write_run_status running
+    council_mark_prior_runs_superseded "$pool" "$newer" gate
+    COUNCIL_RUN_DIR="$old"; COUNCIL_RUN_ID="${old##*/}"
+    council_mark_prior_runs_superseded "$pool" "$old" gate
+    slug="$(council_supersede_key_slug gate)"
+    if jq -e --arg id "${newer##*/}" '.superseded == true and .superseded_by == $id' "$old/run-status.json" >/dev/null \
+       && jq -e '.superseded == false' "$newer/run-status.json" >/dev/null \
+       && [[ "$(cat "$pool/latest-$slug")" == "${newer##*/}" ]]; then
+        test_pass
+    else
+        test_fail "delayed older scan superseded the newest run or regressed its pointer"
+    fi
+}
+
+test_creation_order_does_not_follow_pid_sort() {
+    test_case "same-second runs use creation order rather than PID lexical order"
+    local pool first second slug
+    pool="$(mktemp -d "$TEST_TMP_DIR/pool-order.XXXXXX")"
+    first="$pool/20261001-100000-fffffe"; second="$pool/20261001-100000-000001"
+    mkdir -p "$first" "$second"
+    COUNCIL_SUPERSEDE_KEY="gate"
+    COUNCIL_RUN_DIR="$first"; COUNCIL_RUN_ID="${first##*/}"
+    council_write_run_status running
+    COUNCIL_RUN_DIR="$second"; COUNCIL_RUN_ID="${second##*/}"
+    council_write_run_status running
+    council_mark_prior_runs_superseded "$pool" "$second" gate
+    COUNCIL_RUN_DIR="$first"; COUNCIL_RUN_ID="${first##*/}"
+    council_mark_prior_runs_superseded "$pool" "$first" gate
+    slug="$(council_supersede_key_slug gate)"
+    if jq -e '.superseded == false and .created_order > 0' "$second/run-status.json" >/dev/null \
+       && [[ "$(cat "$pool/latest-$slug")" == "${second##*/}" ]] \
+       && [[ "$(jq -r '.created_order' "$first/run-status.json")" -lt "$(jq -r '.created_order' "$second/run-status.json")" ]]; then
+        test_pass
+    else
+        test_fail "newest same-second run was not selected by its creation order"
+    fi
+}
+
+test_completion_waits_for_supersession_lock() {
+    test_case "an older completion waits for the pool lock and preserves supersession"
+    local pool older
+    pool="$(mktemp -d "$TEST_TMP_DIR/pool-completion.XXXXXX")"
+    older="$pool/20261001-100000-000001"
+    mkdir -p "$older"
+    COUNCIL_SUPERSEDE_KEY="gate"
+    COUNCIL_RUN_DIR="$older"; COUNCIL_RUN_ID="${older##*/}"
+    council_write_run_status running
+    if python3 - "$PROJECT_ROOT" "$pool" "$older" <<'PYTEST'
+import fcntl
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+root, pool, older = map(Path, sys.argv[1:])
+writer = None
+try:
+    with (pool / ".run-state.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        writer = subprocess.Popen([
+            "/bin/bash", "-c",
+            'source "$1/scripts/lib/council.sh"; COUNCIL_RUN_DIR="$2"; '
+            'COUNCIL_RUN_ID="${2##*/}"; COUNCIL_SUPERSEDE_KEY=gate; '
+            'touch "$2/writer-ready"; while [[ ! -f "$2/writer-go" ]]; do sleep 0.01; done; '
+            'council_write_run_status finished completed',
+            "test", str(root), str(older),
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ready_deadline = time.monotonic() + 10
+        while not (older / "writer-ready").exists():
+            assert writer.poll() is None, "completion writer failed before readiness"
+            assert time.monotonic() < ready_deadline, "completion writer did not become ready"
+            time.sleep(0.01)
+        (older / "writer-go").touch()
+        time.sleep(0.5)
+        assert writer.poll() is None, "completion ignored the pool supersession lock"
+        status = older / "run-status.json"
+        record = json.loads(status.read_text())
+        record.update(superseded=True, superseded_by="newer-run")
+        replacement = status.with_suffix(".locked-test")
+        replacement.write_text(json.dumps(record))
+        os.replace(replacement, status)
+    assert writer.wait(timeout=10) == 0
+    final = json.loads(status.read_text())
+    assert final["state"] == "finished" and final["status"] == "completed"
+    assert final["superseded"] is True and final["superseded_by"] == "newer-run"
+finally:
+    if writer is not None and writer.poll() is None:
+        writer.terminate()
+        writer.wait(timeout=10)
+PYTEST
+    then test_pass; else test_fail "concurrent completion did not preserve the locked supersession update"; fi
+}
+
+test_failed_initial_beacon_is_not_published() {
+    test_case "a failed initial beacon write does not publish an empty run directory"
+    local pool rc=0
+    pool="$(mktemp -d "$TEST_TMP_DIR/pool-beacon-failure.XXXXXX")"
+    (
+        python3() { return 1; }
+        COUNCIL_OUTPUT_DIR="$pool" COUNCIL_SUPERSEDE_KEY="" council_create_run_dir
+    ) >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" -ne 0 ]] && [[ -z "$(find "$pool" -mindepth 1 -maxdepth 1 -type d -print -quit)" ]]; then
+        test_pass
+    else
+        test_fail "failed beacon persistence still published a visible run directory"
+    fi
+}
+
 source "$PROJECT_ROOT/scripts/lib/council.sh"
 
 test_supersede_key_slug_is_fs_safe
@@ -132,5 +252,9 @@ test_same_key_supersedes_prior
 test_different_keys_do_not_cross_supersede
 test_unkeyed_run_is_a_noop
 test_summary_carries_supersede_key
+test_delayed_older_scanner_keeps_newest
+test_creation_order_does_not_follow_pid_sort
+test_completion_waits_for_supersession_lock
+test_failed_initial_beacon_is_not_published
 
 test_summary

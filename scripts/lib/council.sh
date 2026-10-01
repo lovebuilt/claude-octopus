@@ -3654,39 +3654,18 @@ council_write_run_status() {
     # poller's `kill -0` would watch the wrong process. Prefer BASHPID, fall back
     # to $$ on bash 3.2 (macOS default) where BASHPID is unset.
     local pid="${BASHPID:-$$}"
-    local path="${COUNCIL_RUN_DIR}/run-status.json"
-    local tmp="${COUNCIL_RUN_DIR}/run-status.json.tmp"
-    # Preserve a superseded mark written by a LATER same-key run across this run's
-    # own later (e.g. "finished") beacon rewrite, so a newer round's supersession
-    # is not clobbered when an older round finalizes.
-    local existing_superseded="false" existing_by=""
-    if [[ -f "$path" ]]; then
-        existing_superseded="$(jq -r '.superseded // false' "$path" 2>/dev/null || echo false)"
-        existing_by="$(jq -r '.superseded_by // empty' "$path" 2>/dev/null || true)"
-    fi
-    [[ "$existing_superseded" == "true" ]] || existing_superseded="false"
-    if jq -n --arg state "$state" --arg status "$status" \
-            --arg run_id "${COUNCIL_RUN_ID:-}" --arg session_id "${COUNCIL_SESSION_ID:-}" --argjson pid "$pid" \
-            --arg supersede_key "${COUNCIL_SUPERSEDE_KEY:-}" \
-            --argjson superseded "$existing_superseded" \
-            --arg superseded_by "$existing_by" \
-            '{state:$state, pid:$pid, run_id:$run_id,
-              session_id:(if $session_id == "" then null else $session_id end),
-              supersede_key:(if $supersede_key == "" then null else $supersede_key end),
-              superseded:$superseded,
-              superseded_by:(if $superseded_by == "" then null else $superseded_by end),
-              status:(if $status == "" then null else $status end)}' \
-            > "$tmp" 2>/dev/null && mv -f "$tmp" "$path" 2>/dev/null; then
-        return 0
-    fi
-    # Fall back to a minimal valid beacon — still written atomically (tmp + mv) so
-    # a poller never reads a half-written file and a prior valid beacon is not
-    # clobbered by a partial direct write.
-    if printf '{"state":"%s","pid":%s}\n' "$state" "$pid" > "$tmp" 2>/dev/null; then
-        mv -f "$tmp" "$path" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
-    else
-        rm -f "$tmp" 2>/dev/null || true
-    fi
+    # The helper holds a pool-wide kernel lock across the read/merge/rename.
+    # Supersession uses that same lock, so a concurrent older completion cannot
+    # overwrite a newer run's mark. Keep prior state intact if persistence fails.
+    jq -n --arg state "$state" --arg status "$status" \
+        --arg run_id "${COUNCIL_RUN_ID:-}" --arg session_id "${COUNCIL_SESSION_ID:-}" --argjson pid "$pid" \
+        --arg supersede_key "${COUNCIL_SUPERSEDE_KEY:-}" \
+        '{state:$state, pid:$pid, run_id:$run_id,
+          session_id:(if $session_id == "" then null else $session_id end),
+          supersede_key:(if $supersede_key == "" then null else $supersede_key end),
+          status:(if $status == "" then null else $status end)}' \
+        | python3 "${_council_registry_dir}/../helpers/council-run-state.py" \
+            write "$COUNCIL_RUN_DIR" || true
     return 0
 }
 
@@ -3725,38 +3704,13 @@ council_supersede_key_slug() {
 }
 
 council_mark_prior_runs_superseded() {
-    # When the current run carries a supersede key, mark every OTHER run dir in the
-    # same pool carrying the SAME key as superseded (idempotent merge into its
-    # run-status.json) and point a pool `latest-<slug>` file at this run. Runs with
-    # no key, or a different key, are left untouched — so CP1 and CP2 interleaved in
-    # one session pool never supersede each other. Best-effort: never fails the run.
-    local pool="$1" current_run_dir="$2" key="$3"
-    [[ -n "$key" ]] || return 0
-    [[ -d "$pool" ]] || return 0
-    command -v jq >/dev/null 2>&1 || return 0
-    local slug other status_path tmp other_key
+    # A delayed older scanner still selects the newest creation order. The helper
+    # serializes both supersession and beacon completion under the same pool lock.
+    local pool="$1" current_run_dir="$2" key="$3" slug
+    [[ -n "$key" && -d "$pool" ]] || return 0
     slug="$(council_supersede_key_slug "$key")"
-    for other in "$pool"/*/; do
-        [[ -d "$other" ]] || continue
-        other="${other%/}"
-        [[ "$other" == "$current_run_dir" ]] && continue
-        status_path="$other/run-status.json"
-        [[ -f "$status_path" ]] || continue
-        other_key="$(jq -r '.supersede_key // empty' "$status_path" 2>/dev/null || true)"
-        [[ "$other_key" == "$key" ]] || continue
-        [[ "$(jq -r '.superseded // false' "$status_path" 2>/dev/null)" == "true" ]] && continue
-        tmp="$status_path.tmp.$$"
-        if jq --arg by "${COUNCIL_RUN_ID:-}" '. + {superseded:true, superseded_by:$by}' "$status_path" > "$tmp" 2>/dev/null; then
-            mv -f "$tmp" "$status_path" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
-        else
-            rm -f "$tmp" 2>/dev/null || true
-        fi
-    done
-    local ptr="$pool/latest-${slug}" ptr_tmp
-    ptr_tmp="$ptr.tmp.$$"
-    if printf '%s\n' "${COUNCIL_RUN_ID:-}" > "$ptr_tmp" 2>/dev/null; then
-        mv -f "$ptr_tmp" "$ptr" 2>/dev/null || rm -f "$ptr_tmp" 2>/dev/null || true
-    fi
+    python3 "${_council_registry_dir}/../helpers/council-run-state.py" \
+        supersede "$pool" "$current_run_dir" "$key" "latest-${slug}" || true
     return 0
 }
 
@@ -3806,6 +3760,12 @@ council_create_run_dir() {
     COUNCIL_RUN_DIR="$staging"
     council_write_run_status "running"
     COUNCIL_RUN_DIR="$_final"
+    # Persistence may fail or time out on the pool lock. Preserve the publication
+    # invariant: a visible run directory must already contain its atomic beacon.
+    if [[ ! -s "$staging/run-status.json" ]]; then
+        rm -rf "$staging" 2>/dev/null
+        return 1
+    fi
     if ! mv "$staging" "$COUNCIL_RUN_DIR" 2>/dev/null; then
         rm -rf "$staging" 2>/dev/null
         return 1
