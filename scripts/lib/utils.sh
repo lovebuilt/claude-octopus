@@ -457,6 +457,18 @@ validate_agent_command() {
     fi
     local trusted_kimi_shim="${trusted_plugin_root}/scripts/helpers/kimi-exec.sh"
 
+    if [[ "$cmd" == *anthropic-api-exec.sh* ]]; then
+        local -a api_parts
+        octo_dispatch_command_to_argv "$cmd" || return 1
+        api_parts=("${OCTO_COMMAND_ARGV[@]}")
+        [[ "${#api_parts[@]}" -eq 7 && "${api_parts[0]}" == "${trusted_plugin_root}/scripts/helpers/anthropic-api-exec.sh" ]] || return 1
+        [[ "${api_parts[1]}" == --model && "${api_parts[3]}" == --effort && "${api_parts[5]}" == --thinking ]] || return 1
+        case "${api_parts[2]}" in claude-sonnet-5-5|claude-opus-5-5) ;; *) return 1 ;; esac
+        case "${api_parts[4]}" in low|medium|high|xhigh|max) ;; *) return 1 ;; esac
+        case "${api_parts[6]}" in auto|adaptive|between_tools) ;; *) return 1 ;; esac
+        return 0
+    fi
+
     # Allow helper shims only when they are the executable token, not when they
     # appear later in the command string. OpenAI-compatible helper arguments are
     # validated strictly because model and cwd values are interpolated into the

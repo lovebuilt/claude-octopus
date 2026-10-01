@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Spec and planning workflows keep distilled research, intent, decisions and
+  stable task identities in portable feature directories. Existing root specs
+  and Spec Kit layouts remain usable. `OCTOPUS_FEATURE_LAYOUT=legacy` retains
+  root-file behavior through the next minor release.
+- Project policy is bound before workflow seats run. Open user decisions persist
+  across planning and resume, and affected tasks wait for answers. Development
+  checks artifact consistency before requesting at most one independent review.
+  Dispatch validates file scopes and dependencies on every task wave. Fresh-clone
+  completion claims require current committed files and fresh verification.
+
 ### Fixed
 
 - Review and brainstorm advisors read provider answers from completed result files

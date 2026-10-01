@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/feature-scheduler.sh"
 
 # Double Diamond workflow phases
 # Extracted from orchestrate.sh to reduce file size
@@ -1203,6 +1204,11 @@ grasp_define() {
         return 0
     fi
 
+    if declare -F feature_workflow_refresh_clarifications >/dev/null 2>&1; then
+        feature_workflow_refresh_clarifications || true
+        feature_workflow_gate plan || true
+    fi
+
     # Cost transparency (v7.18.0 - P0.0)
     if ! display_workflow_cost_estimate "Grasp (Define Phase)" 1 2 1200; then
         log "WARN" "Workflow cancelled by user after cost review"
@@ -1320,6 +1326,9 @@ $consensus
 EOF
 
     log INFO "Consensus document: $consensus_file"
+    if [[ -n "$consensus_source" ]] && declare -F feature_workflow_plan_completed >/dev/null 2>&1; then
+        feature_workflow_plan_completed "$consensus_file" "$consensus_source" "$task_group" || true
+    fi
     echo ""
     echo -e "${GREEN}✓${NC} Problem definition saved to: $consensus_file"
     echo ""
@@ -4168,6 +4177,10 @@ tangle_handle_verification_signal() {
 
 tangle_verify() {
     local prompt="$1"
+    if declare -F feature_workflow_refresh_clarifications >/dev/null 2>&1; then
+        feature_workflow_refresh_clarifications || true
+        feature_workflow_gate verify || return 1
+    fi
     local run_id="${OCTOPUS_VERIFY_RUN_ID:-$(date +%s)-$$}"
     if [[ ! "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ || "$run_id" == *..* ]]; then
         log ERROR "Invalid OCTOPUS_VERIFY_RUN_ID: $run_id"
@@ -4559,6 +4572,9 @@ tangle_develop() {
 
     original_project_root="${PROJECT_ROOT:-$PWD}"
     original_pwd="$PWD"
+    if declare -F feature_workflow_preimplement >/dev/null 2>&1; then
+        feature_workflow_preimplement || return 1
+    fi
     resolved_grasp_file="$grasp_file"
     resolved_plan_file=""
     rc=0
@@ -4640,6 +4656,11 @@ _tangle_develop_in_workspace() {
         log INFO "[DRY-RUN] Would tangle: $prompt"
         log INFO "[DRY-RUN] Would decompose into subtasks and execute in parallel"
         return 0
+    fi
+
+    if [[ -n "${FEATURE_TASK_CONTRACT:-}" && "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]]; then
+        feature_tasks_tangle_execute "$prompt" "$grasp_file" "$task_group" "$pre_resolved_plan_file"
+        return $?
     fi
 
     if ! declare -F review_kill_process_tree_frozen >/dev/null 2>&1 \
@@ -4767,6 +4788,10 @@ ${plan_block}"
     # receive plan content instead of an unreadable cross-workspace file path.
     local design_review_synthesis=""
     design_review_ceremony "$resolved_prompt" "$context" design_review_synthesis
+    if declare -F feature_workflow_policy_response >/dev/null 2>&1; then
+        feature_workflow_policy_response "$design_review_synthesis" || true
+        feature_workflow_gate develop "" "${file_ref:-$grasp_file}" || return 1
+    fi
 
     # Step 1: Decompose into validated subtasks
     log INFO "Step 1: Task decomposition..."
@@ -4809,12 +4834,17 @@ $(tangle_decomposition_json_contract_guidance)"
     fi
 
     local subtasks
-    subtasks=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-dispatch-watcher" \
-        tangle_run_decomposition_fallbacks \
-        "$tangle_decompose_agent" "$tangle_decompose_fallback_agent" "$decompose_prompt" 0) || {
-        log ERROR "Decomposition failed with all providers; refusing monolithic direct fallback"
-        return 1
-    }
+    if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+        [[ -f "${OCTOPUS_FEATURE_WAVE_DECOMPOSITION:-}" ]] || return 1
+        subtasks=$(tangle_render_json_decomposition_output "$(<"$OCTOPUS_FEATURE_WAVE_DECOMPOSITION")") || return 1
+    else
+        subtasks=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-dispatch-watcher" \
+            tangle_run_decomposition_fallbacks \
+            "$tangle_decompose_agent" "$tangle_decompose_fallback_agent" "$decompose_prompt" 0) || {
+            log ERROR "Decomposition failed with all providers; refusing monolithic direct fallback"
+            return 1
+        }
+    fi
 
     echo -e "${CYAN}Decomposed into subtasks:${NC}"
     echo "$subtasks"
@@ -4827,6 +4857,7 @@ $(tangle_decomposition_json_contract_guidance)"
 
     local parallel_safety_reason=""
     if [[ $parseable_subtask_count -eq 0 ]] || [[ $parseable_coding_subtask_count -eq 0 ]]; then
+        [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]] || return 1
         local retry_reason="no parseable subtasks"
         [[ $parseable_subtask_count -gt 0 ]] && retry_reason="no parseable [CODING] subtasks"
         log WARN "Decomposition failed validation (${retry_reason}); redecomposing from first principles"
@@ -4840,6 +4871,7 @@ $(tangle_decomposition_json_contract_guidance)"
             return 1
         fi
     elif ! parallel_safety_reason=$(tangle_validate_parallel_write_scopes "$subtasks"); then
+        [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]] || return 1
         local retry_reason="${parallel_safety_reason:-no parseable subtasks}"
         if [[ $parseable_subtask_count -eq 0 ]]; then
             retry_reason="no parseable subtasks"
@@ -4877,6 +4909,7 @@ $(tangle_decomposition_json_contract_guidance)"
     fi
 
     if ! parallel_safety_reason=$(tangle_validate_parallel_write_scopes "$subtasks"); then
+        [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]] || return 1
         if [[ "$parallel_safety_reason" != *"overlaps subtask"* ]]; then
             log ERROR "Unsafe parallel decomposition after reformat: ${parallel_safety_reason}; refusing direct fallback"
             return 1
@@ -4901,6 +4934,10 @@ $(tangle_decomposition_json_contract_guidance)"
         return 1
     fi
     if ! tangle_decomposition_adequacy_verdict "$adequacy_review"; then
+        if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+            log WARN "Portable task wave failed adequacy review; preserve its identities and request a replan"
+            return 1
+        fi
         local adequacy_reason
         adequacy_reason=$(tangle_decomposition_adequacy_reasons "$adequacy_review")
         [[ -n "$adequacy_reason" ]] || adequacy_reason="review returned FAIL or malformed verdict"
@@ -4970,6 +5007,10 @@ $(tangle_decomposition_json_contract_guidance)"
         return 125
     fi
 
+    if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+        feature_tasks_revalidate_active_wave || return 1
+    fi
+
     # Coding providers must run behind a parent-owned filesystem boundary.
     export OCTOPUS_TANGLE_EXECUTION_BOUNDARY=true
     export OCTOPUS_TANGLE_WORKTREE="$PROJECT_ROOT"
@@ -4995,6 +5036,15 @@ $(tangle_decomposition_json_contract_guidance)"
     if [[ ${#subtask_lines[@]} -ne $parseable_subtask_count ]]; then
         log ERROR "Parsed $parseable_subtask_count subtasks but retained ${#subtask_lines[@]} for dispatch; refusing partial tangle execution"
         return 1
+    fi
+    local feature_task_ids=()
+    if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+        local feature_tid
+        while IFS= read -r feature_tid; do
+            [[ "$feature_tid" =~ ^T[0-9]{3,9}$ ]] || return 1
+            feature_task_ids+=("$feature_tid")
+        done < <(jq -r '.[]' "$OCTOPUS_FEATURE_WAVE_IDS_FILE")
+        [[ "${#feature_task_ids[@]}" -eq "$parseable_subtask_count" ]] || return 1
     fi
 
     # [CODING] and [REASONING] subtask routing are overridable. This keeps
@@ -5049,6 +5099,9 @@ $(tangle_decomposition_json_contract_guidance)"
         fi
         subtask=$(echo "$subtask" | sed 's/\[CODING\]\s*//; s/\[REASONING\]\s*//')
         local task_id="tangle-${task_group}-${subtask_num}"
+        if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+            task_id="tangle-${task_group}-${feature_task_ids[$subtask_num]}"
+        fi
         local pane_title="$pane_icon Subtask $((subtask_num+1))"
         local subtask_prompt
         subtask_prompt=$(build_tangle_subtask_prompt "$resolved_prompt" "$subtask")

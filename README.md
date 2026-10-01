@@ -57,7 +57,7 @@ disable it.
 <!-- BEGIN CURRENT RELEASE -->
 > 🆕 **v11.9.6 — Fix Embrace artifact selection, research citation limits, and cost display.**
 >
-> **Default roster:** Claude Opus 5.5 leads architecture, planning, security reasoning, and final judgment; GPT-5.6 Sol is the independent implementation/review peer; Claude Sonnet 5 is the standard Claude seat; Fable 5.1 remains an opt-in judgment escalation. Existing model pins and provider configuration still win. See [the routing strategy](docs/MODEL-ROUTING-STRATEGY.md).
+> **Default roster:** Claude Opus 5.5 leads architecture, planning, security reasoning, and final judgment; GPT-5.6 Sol is the independent implementation/review peer; Claude Sonnet 5.5 is the standard Claude seat; Fable 5.1 remains an opt-in judgment escalation. Existing model pins and provider configuration still win. See [the routing strategy](docs/MODEL-ROUTING-STRATEGY.md).
 <!-- END CURRENT RELEASE -->
 >
 > ```bash
@@ -105,7 +105,7 @@ rollback details.
 <summary>Upgrading to 9.5x</summary>
 
 <!-- BEGIN CURRENT MODEL DEFAULTS -->
-- Current fresh configurations use **GPT-5.6 Sol** for Codex implementation/review, **Claude Opus 5.5** for premium Claude work, and **Claude Sonnet 5** for the standard Claude seat. Existing environment, session, and `providers.json` pins remain unchanged; `OCTOPUS_LEGACY_ROLES=1` restores the pre-frontier role mapping.
+- Current fresh configurations use **GPT-5.6 Sol** for Codex implementation/review, **Claude Opus 5.5** for premium Claude work, and **Claude Sonnet 5.5** for the standard Claude seat. Existing environment, session, and `providers.json` pins remain unchanged; `OCTOPUS_LEGACY_ROLES=1` restores the pre-frontier role mapping.
 <!-- END CURRENT MODEL DEFAULTS -->
 - New claude-sdk seat env vars (v9.50): `CLAUDE_SDK_API_KEY`, `OCTOPUS_CLAUDE_SDK_MODEL`, `OCTOPUS_CLAUDE_SDK_MAX_TOKENS`, `OCTOPUS_CLAUDE_SDK_ALLOWED_MODELS`, `OCTOPUS_CLAUDE_SDK_CONTEXT_BUDGET`.
 - Fable guards apply to `claude-fable-5-1` and preserved `claude-fable-5` pins. `OCTOPUS_FABLE5_MAX_EFFORT` raises the default `high` ceiling without disabling the other guards.
@@ -202,7 +202,7 @@ lifecycle hooks.
 See [installation health](docs/INSTALLATION-HEALTH.md) for exit codes and stored
 state.
 
-Claude Code **v2.1.14+** is the minimum supported runtime. Newer Claude Code releases unlock additional Octopus diagnostics and release checks automatically; the current plugin tracks 184 Claude Code capability flags through **Claude Code v2.1.280**.
+Claude Code **v2.1.14+** is the minimum supported runtime. Newer Claude Code releases unlock additional Octopus diagnostics and release checks automatically; the current plugin tracks 185 Claude Code capability flags through **Claude Code v2.1.284**.
 
 <details>
 <summary>Install for Codex CLI</summary>

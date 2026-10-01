@@ -673,6 +673,31 @@ get_agent_command() {
                 echo "${PLUGIN_DIR}/scripts/helpers/kimi-exec.sh"
             fi
             ;;
+        anthropic-api)
+            # This seat answers from supplied text. It cannot inspect files,
+            # browse, run tests, or implement code through tools.
+            case "$role" in
+                planner|strategist|architect|researcher|synthesizer|reviewer|code-reviewer|security-reviewer) ;;
+                *)
+                    log ERROR "anthropic-api is text-only; role '${role:-unknown}' needs a tool-capable seat"
+                    return 1
+                    ;;
+            esac
+            model="$(get_agent_model "$agent_type" "$phase" "$role")" || return 1
+            local api_effort api_thinking
+            api_effort="$(octopus_resolve_reasoning_level anthropic-api "$phase" "$role")" || return 1
+            api_effort="${api_effort:-high}"
+            api_thinking="${OCTOPUS_ANTHROPIC_API_THINKING:-auto}"
+            case "$model" in claude-sonnet-5-5|claude-opus-5-5) ;; *) log ERROR "anthropic-api requires Sonnet 5.5 or Opus 5.5"; return 1 ;; esac
+            case "$api_effort" in low|medium|high|xhigh|max) ;; *) log ERROR "anthropic-api requires low, medium, high, xhigh, or max effort"; return 1 ;; esac
+            case "$api_thinking" in auto|adaptive|between_tools) ;; *) log ERROR "Invalid anthropic-api thinking mode"; return 1 ;; esac
+            if [[ "$api_thinking" == between_tools && ( "$model" != claude-sonnet-5-5 || "$api_effort" == xhigh || "$api_effort" == max ) ]]; then
+                log ERROR "between_tools requires Sonnet 5.5 at low, medium, or high effort"
+                return 1
+            fi
+            printf '%q --model %s --effort %s --thinking %s\n' \
+                "${PLUGIN_DIR}/scripts/helpers/anthropic-api-exec.sh" "$model" "$api_effort" "$api_thinking"
+            ;;
         claude-sdk|claude-sdk-agent|claude-sdk-research)  # v9.50.0: Claude Agent SDK seat
             # Routes to helpers/claude-sdk-exec.sh when CLAUDE_SDK_API_KEY is set —
             # unlocks Opus 5 + 1M context independent of the host session. Model
@@ -795,6 +820,10 @@ get_provider_context_limit() {
             configured_limit="${OCTOPUS_CODEX_LARGE_CONTEXT_BUDGET:-${default_budget}}"
             transport_limit="${OCTOPUS_CODEX_EFFECTIVE_CONTEXT_LIMIT:-1050000}"
             ;;
+        anthropic-api)
+            configured_limit="${OCTOPUS_ANTHROPIC_API_CONTEXT_BUDGET:-${default_budget}}"
+            transport_limit="${OCTOPUS_ANTHROPIC_API_EFFECTIVE_CONTEXT_LIMIT:-1000000}"
+            ;;
         claude-sdk*)
             configured_limit="${OCTOPUS_CLAUDE_SDK_CONTEXT_BUDGET:-1000000}"
             transport_limit="${OCTOPUS_CLAUDE_SDK_EFFECTIVE_CONTEXT_LIMIT:-1000000}"
@@ -844,7 +873,9 @@ get_provider_context_limit() {
     fi
 
     local output_reserve overhead_reserve available
-    output_reserve="$(octo_normalize_nonnegative_context_value "${OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS:-1024}" "output context reserve")" || return 2
+    local default_output_reserve=1024
+    [[ "$provider" == anthropic-api ]] && default_output_reserve="${OCTOPUS_ANTHROPIC_API_MAX_TOKENS:-8192}"
+    output_reserve="$(octo_normalize_nonnegative_context_value "${OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS:-$default_output_reserve}" "output context reserve")" || return 2
     overhead_reserve="$(octo_normalize_nonnegative_context_value "${OCTOPUS_CONTEXT_OVERHEAD_TOKENS:-512}" "system and tool context reserve")" || return 2
     available=$((ceiling - output_reserve - overhead_reserve))
     if [[ "$available" -lt 1 ]]; then

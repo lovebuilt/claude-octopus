@@ -162,6 +162,16 @@ _octo_provider_static_readiness() {
                 status="available"; reason_code="ready"; remediation=""
             fi
             ;;
+        anthropic-api)
+            remediation="Install Python 3 and supply ANTHROPIC_API_KEY explicitly."
+            if command -v python3 >/dev/null 2>&1; then
+                if _octo_value_has_nonwhitespace "${ANTHROPIC_API_KEY:-}"; then
+                    status="available"; reason_code="ready"; remediation=""
+                else
+                    status="degraded"; reason_code="auth-missing"
+                fi
+            fi
+            ;;
         claude-sdk)
             remediation="Install claude-agent or Claude Code, then set CLAUDE_SDK_API_KEY."
             if command -v claude-agent >/dev/null 2>&1 || command -v claude >/dev/null 2>&1; then

@@ -202,6 +202,7 @@ source "${SCRIPT_DIR}/lib/routing.sh" 2>/dev/null || true
 
 # Security utilities: anti-injection, secure tempfiles, output guards
 source "${SCRIPT_DIR}/lib/secure.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/lib/feature-workflow.sh" 2>/dev/null || true
 
 # Provider detection & version checking (v9.7.7 extraction)
 # Strict source (no silencing) for libs critical to core workflows — surfaces syntax errors
@@ -556,6 +557,7 @@ SUPPORTS_AGENT_SETTINGS_AGENT_FIELD=false # v9.42: Claude Code v2.1.157+ (claude
 SUPPORTS_SKILLS_AUTO_PLUGIN_LOAD=false  # v9.42: Claude Code v2.1.157+ (.claude/skills plugin autoload)
 SUPPORTS_ENTER_WORKTREE_SWITCH=false    # v9.42: Claude Code v2.1.157+ (EnterWorktree can switch Claude-managed worktrees)
 SUPPORTS_TOOL_DECISION_PARAMS_OTEL=false # v9.42: Claude Code v2.1.157+ (tool_decision tool_parameters with OTEL_LOG_TOOL_DETAILS=1)
+SUPPORTS_SONNET_5_5=false                # Claude Code v2.1.284+ (claude-sonnet-5-5)
 SUPPORTS_SONNET_5=false                  # Claude Code v2.1.197+ (claude-sonnet-5)
 SUPPORTS_OPUS_5=false                    # Claude Code v2.1.219+ (claude-opus-5 and default Opus alias)
 SUPPORTS_OPUS_5_5=false
@@ -2456,6 +2458,15 @@ if [[ "$OCTOPUS_ARTIFACT_READ_ONLY" != "true" && "$COMMAND" != "help" && "$COMMA
     fi
 fi
 
+if [[ "${DRY_RUN:-false}" != true && "${1:-}" != --help && "${1:-}" != -h ]]; then
+    case "$COMMAND" in
+        probe|probe-single|discover|research|define|grasp|develop|tangle|embrace|deliver|ink|review|code-review|council|verify|verification-only)
+            feature_workflow_begin "$COMMAND" "${1:-feature}" false || true
+            [[ "${FEATURE_AMBIGUOUS:-false}" != true ]] || exit 1
+            ;;
+    esac
+fi
+
 case "$COMMAND" in
     # ═══════════════════════════════════════════════════════════════════════════
     # DOUBLE DIAMOND COMMANDS (with intuitive aliases)
@@ -2977,6 +2988,7 @@ case "$COMMAND" in
             echo "Example: $(basename "$0") agent-resume abc123 'continue the refactor'"
             exit 0
         fi
+        feature_workflow_resume_command "$@"
         if [[ $# -lt 1 || -z "${1:-}" ]]; then
             log ERROR "agent-resume: missing agent-id"
             echo "Usage: $(basename "$0") agent-resume <agent-id> [prompt] [task-id]"

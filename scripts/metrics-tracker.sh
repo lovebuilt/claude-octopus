@@ -215,13 +215,15 @@ get_model_cost() {
         claude-fable-5|claude-fable-5-1) echo "10.00" ;;
         claude-opus-4.8|claude-opus-4.7|claude-opus-4.6|claude-opus-4-8|claude-opus-4-7|claude-opus-4-6) echo "5.00" ;;
         claude-opus-4-5)        echo "15.00" ;;    # legacy
-        claude-sonnet-5)       echo "2.00" ;;
+        claude-sonnet-5|claude-sonnet-5-5) echo "2.00" ;;
         claude-sonnet-4.6|claude-sonnet-4.5|claude-sonnet-4-6|claude-sonnet-4-5) echo "3.00" ;;
         claude-sonnet-4)        echo "3.00" ;;
         claude-haiku-*)         echo "0.25" ;;
 
         # OpenAI/Codex models (rough estimates)
         gpt-6-astra)            echo "10.00" ;;
+        gpt-6.1-sol|gpt-6-sol)  echo "2.00" ;;
+        gpt-6-luna)             echo "0.10" ;;
         gpt-5.6-sol)            echo "4.00" ;;
         gpt-5.6-terra)          echo "2.00" ;;
         gpt-5.6-luna)           echo "0.20" ;;

@@ -134,7 +134,7 @@ Use `VERTEXAI_API_KEY` or `GOOGLE_API_KEY` inside the selected provider's
 
 ## Current providers
 
-codex, commandcode, claude, claude-sdk (Agent SDK seat), agy (Antigravity,
+codex, commandcode, claude, claude-sdk (Agent SDK seat), anthropic-api (text-only Messages seat), agy (Antigravity,
 Google seat), perplexity, opencode, openrouter, orcarouter, atlascloud,
 openai-compatible, openai-tools, openai-compatible-agent, cursor-agent, grok,
 qwen, ollama, copilot, vibe, and kimi.
@@ -160,3 +160,36 @@ cost, health-selection, and independence lists from consumers. Command syntax,
 credential validation, model fallbacks, and environment isolation stay explicit
 because their provider contracts differ and deserve direct tests. The dispatch
 plan is the handoff between those adapters and the common execution lifecycle.
+
+## Anthropic Messages text seat
+
+`anthropic-api` sends one request with no tools using Python's standard library.
+Only an explicit `ANTHROPIC_API_KEY` enters its isolated child environment.
+`config/provider-env-allowlist.json` already includes that key for MCP. The
+adapter ignores CLI authentication, `CLAUDE_SDK_API_KEY`, OAuth tokens,
+`ANTHROPIC_BASE_URL`, and shell credential files. Its endpoint is fixed to the
+Anthropic Messages API, redirects are blocked, and errors report status codes
+without response bodies or credential values.
+
+Select `anthropic-api` explicitly for `planner`, `strategist`, `architect`,
+`researcher`, `synthesizer`, `reviewer`, `code-reviewer`, or `security-reviewer`.
+Supply all evidence in the prompt. Local readiness checks prove only Python
+and key presence; they do not verify authentication or model entitlement.
+The provider does not enter automatic defaults or council selection. To route
+only synthesis through it, run `/octo:model-config route-role synthesizer
+anthropic-api`. Set `ANTHROPIC_API_KEY` in the caller environment before use.
+
+Its default model is `claude-sonnet-5-5` with high effort. API `auto` thinking
+selects `between_tools` at low, medium, or high effort, and adaptive thinking
+at xhigh or max. `claude-opus-5-5` uses adaptive thinking. Explicit model and
+effort pins reach the request unchanged. Unsupported models and incompatible
+thinking modes fail before transport. Set `OCTOPUS_ANTHROPIC_API_TIMEOUT` to
+change the 120-second request timeout, up to 600 seconds, and
+`OCTOPUS_ANTHROPIC_API_MAX_TOKENS` to change the 8,192-token output allowance,
+up to the model's 128,000-token limit. Context admission reserves that output
+allowance. Set `OCTOPUS_ANTHROPIC_API_CONTEXT_BUDGET` to raise the conservative
+12,000-token default budget, up to the native 1M context limit. A larger output
+allowance can require a larger configured context budget.
+
+See the [thinking migration](MODEL-ROUTING-STRATEGY.md#sonnet-55-api-thinking-2026-10-01)
+for the current CLI and Agent SDK limitation and the API compatibility rules.

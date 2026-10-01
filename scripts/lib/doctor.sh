@@ -1445,7 +1445,13 @@ doctor_check_skills() {
     if [[ "${SUPPORTS_SONNET_5:-false}" == "true" ]]; then
         doctor_add "sonnet-5" "skills" "pass" \
             "CC v2.1.197 Sonnet 5 available for standard Claude seats" \
-            "Existing providers.json pins remain unchanged; new configs default to claude-sonnet-5"
+            "Existing providers.json pins remain unchanged; standard seats use the newest supported Sonnet"
+    fi
+
+    if [[ "${SUPPORTS_SONNET_5_5:-false}" == "true" ]]; then
+        doctor_add "sonnet-5-5" "skills" "pass" \
+            "CC v2.1.284 Sonnet 5.5 available for standard Claude seats" \
+            "The anthropic-api text seat supports between_tools; Claude Code keeps adaptive thinking"
     fi
 
     if [[ "${SUPPORTS_OPUS_5:-false}" == "true" ]]; then

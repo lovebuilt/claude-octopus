@@ -392,6 +392,22 @@ _octo_build_provider_env_impl() {
             [[ ${#_trace_env[@]} -gt 0 ]] && PROVIDER_ENV_ARRAY+=("${_trace_env[@]}")
             return 0
             ;;
+        anthropic-api*)
+            # Only an explicitly supplied API key crosses this boundary.
+            # Do not load CLI auth, ~/.env credentials, or gateway endpoints.
+            PROVIDER_ENV_ARRAY=(env -i "PATH=$PATH" "HOME=$HOME" "TERM=${TERM:-dumb}")
+            if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+                PROVIDER_ENV_ARRAY+=("ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
+            fi
+            local _anthropic_adapter_var
+            for _anthropic_adapter_var in OCTOPUS_ANTHROPIC_API_TIMEOUT OCTOPUS_ANTHROPIC_API_MAX_TOKENS; do
+                if [[ -n "${!_anthropic_adapter_var:-}" ]]; then
+                    PROVIDER_ENV_ARRAY+=("${_anthropic_adapter_var}=${!_anthropic_adapter_var}")
+                fi
+            done
+            [[ ${#_trace_env[@]} -gt 0 ]] && PROVIDER_ENV_ARRAY+=("${_trace_env[@]}")
+            return 0
+            ;;
         claude-sdk*)
             # v9.50.0: Agent SDK seat — the shim strips session markers and sets
             # ANTHROPIC_API_KEY itself; just make sure the SDK key is resolvable.

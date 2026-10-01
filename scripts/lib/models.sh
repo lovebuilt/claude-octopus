@@ -17,8 +17,12 @@ _OCTOPUS_MODELS_LOADED=true
 _octo_get_model_catalog_raw() {
     local model="$1"
     case "$model" in
-        # OpenAI GPT-5.x
+        # OpenAI GPT-6 and GPT-5.x. Context values describe API model limits;
+        # dispatch applies the configured transport ceiling separately.
         gpt-6-astra)            echo "1050|yes|yes|yes|codex|premium|limited" ;;
+        gpt-6.1-sol)            echo "1050|yes|yes|yes|codex|standard|active" ;;
+        gpt-6-sol)              echo "1050|yes|yes|yes|codex|standard|active" ;;
+        gpt-6-luna)             echo "1050|yes|yes|yes|codex|budget|active" ;;
         gpt-5.6|gpt-5.6-sol)    echo "1050|yes|yes|yes|codex|premium|active" ;;
         gpt-5.6-terra)          echo "1050|yes|yes|yes|codex|standard|active" ;;
         gpt-5.6-luna)           echo "1050|yes|yes|yes|codex|budget|active" ;;
@@ -43,6 +47,7 @@ _octo_get_model_catalog_raw() {
         auto)                      echo "128|yes|no|no|copilot|standard|active" ;;
         # Claude
         claude-haiku-4.5)      echo "200|yes|yes|yes|claude|budget|active" ;;
+        claude-sonnet-5-5)     echo "1000|yes|yes|yes|claude|standard|active" ;;
         claude-sonnet-5)       echo "1000|yes|yes|yes|claude|standard|active" ;;
         claude-sonnet-4.6)      echo "200|yes|yes|no|claude|standard|active" ;;
         claude-fable-5-1)       echo "1000|yes|yes|yes|claude|premium|active" ;;
@@ -95,6 +100,18 @@ _octo_get_model_catalog_raw() {
 octo_model_canonical_id() {
     local model="${1:-}" candidate=""
     [[ -n "$model" ]] || return 1
+
+    # OpenRouter routing suffixes select a provider for the same base model.
+    # Other suffixes can change capabilities or pricing, so keep them intact.
+    case "$model" in
+        *:nitro|*:floor)
+            if [[ -n "${model%:*}" ]] &&
+               candidate="$(octo_model_canonical_id "${model%:*}")" &&
+               [[ "$(_octo_get_model_catalog_raw "$candidate")" != *"|unknown" ]]; then
+                model="$candidate"
+            fi
+            ;;
+    esac
 
     if [[ "$model" == *:* ]]; then
         candidate="${model#*:}"
@@ -259,6 +276,9 @@ octo_model_family() {
 octo_model_ids() {
     cat <<'EOF'
 gpt-6-astra
+gpt-6.1-sol
+gpt-6-sol
+gpt-6-luna
 gpt-5.6-sol
 gpt-5.6-terra
 gpt-5.6-luna
@@ -277,6 +297,7 @@ o3-mini
 agy/default
 auto
 claude-haiku-4.5
+claude-sonnet-5-5
 claude-sonnet-5
 claude-sonnet-4.6
 claude-fable-5-1

@@ -87,7 +87,9 @@ octo_dispatch_plan_create() {
     else
         input_budget="${OCTOPUS_CONTEXT_BUDGET:-12000}"
     fi
-    output_reserve="${OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS:-1024}"
+    local default_output_reserve=1024
+    [[ "$provider" == anthropic-api ]] && default_output_reserve="${OCTOPUS_ANTHROPIC_API_MAX_TOKENS:-8192}"
+    output_reserve="${OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS:-$default_output_reserve}"
     overhead_reserve="${OCTOPUS_CONTEXT_OVERHEAD_TOKENS:-512}"
 
     tool_policy="$(get_tool_policy "$role" 2>/dev/null || printf 'unknown')"
@@ -95,6 +97,7 @@ octo_dispatch_plan_create() {
        octo_tool_loop_requires_no_tools "$phase" "$role"; then
         tool_policy=none
     fi
+    [[ "$provider" == anthropic-api ]] && tool_policy=none
     if declare -f _octo_usage_billing_mode >/dev/null 2>&1; then
         billing_mode="$(_octo_usage_billing_mode "$agent_spec")"
     else

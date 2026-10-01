@@ -149,6 +149,7 @@ octo_provider_model_allowlist_var() {
         codex) echo "OCTOPUS_CODEX_ALLOWED_MODELS" ;;
         agy) echo "OCTOPUS_AGY_ALLOWED_MODELS" ;;
         claude-sdk) echo "OCTOPUS_CLAUDE_SDK_ALLOWED_MODELS" ;;
+        anthropic-api) echo "OCTOPUS_ANTHROPIC_API_ALLOWED_MODELS" ;;
         claude) echo "OCTOPUS_CLAUDE_ALLOWED_MODELS" ;;
         openrouter) echo "OCTOPUS_OPENROUTER_ALLOWED_MODELS" ;;
         orcarouter) echo "OCTOPUS_ORCAROUTER_ALLOWED_MODELS" ;;

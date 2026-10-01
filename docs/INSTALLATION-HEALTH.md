@@ -172,3 +172,56 @@ Run `bash tests/unit/test-native-windows-hook-inert.sh` and
 `bash tests/unit/test-windows-doctor-compat.sh` to check simulated Windows hosts,
 WSL identification, and the documented entry points. Actual Windows desktop
 installation requires a Windows host; simulation does not establish host discovery.
+
+## Portable feature workflow
+
+`/octo:spec` creates `specs/NNN-slug/` with `spec.md`, `research.md`,
+`plan.md`, `tasks.md`, `decisions.md` and `feature.json`. The manifest keeps
+relative artifact paths, provider attribution, task identities and open user
+decisions. Existing Spec Kit directories are reused. Raw transcripts and policy
+snapshots stay in runtime state.
+
+`OCTOPUS_FEATURE` selects a feature directory or spec filename. With multiple
+features, select one before planning, development or resume. An explicit spec
+filename is honored. `OCTOPUS_FEATURE_LAYOUT=legacy` keeps new specs at the
+repository root; the default `auto` retains existing root specs and uses feature
+directories for new ones. Both layouts remain supported through the next minor
+release. Non-Git or unwritable repositories receive a warning and use the legacy
+path when it is writable.
+
+Policy discovery checks `.specify/memory/constitution.md`, then the path in
+`OCTOPUS_PROJECT_POLICY`, then `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md` and
+`.github/CONTRIBUTING.md`. The first readable, bounded source wins. Missing
+policy warns and proceeds. Octopus does not create a constitution. A verified
+conflict must quote the policy and the proposed action against their current
+source digests before implementation is blocked.
+
+Skipped user questions remain in the spec. The host asks at most three in a
+batch before the next affected phase. Task-specific decisions defer affected
+tasks while independent tasks may proceed. Models cannot resolve user decisions
+by supplying their own answers.
+
+`/octo:resume specs/NNN-slug` reads repository artifacts on a fresh clone.
+Historical completion is evidence to check, not execution permission. Completed
+coding scopes must match the current committed files and pass fresh repository
+verification before they unlock dependent tasks. Unverified work remains pending.
+
+The delivery checks for these paths exercise first and repeated activation,
+legacy and Spec Kit compatibility, concurrent allocation, secret withholding,
+policy conflicts, skipped questions, stable task identities, both dispatchers,
+fresh-home resume and the packaged command/skill references. They use disposable
+repositories and inert providers. They do not install into an active host cache.
+
+Run the focused acceptance checks with:
+
+```bash
+bash tests/unit/test-feature-delivery.sh
+bash tests/unit/test-feature-workflow.sh
+bash tests/unit/test-feature-tasks.sh
+bash tests/unit/test-feature-analysis-runtime.sh
+make sync-check
+make validate-plugin-assembly
+```
+
+Run `make ci-changed` before pushing and `make ci-local` before merging.
+The hosted branch checks must pass against the PR's current commit.

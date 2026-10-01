@@ -1269,6 +1269,8 @@ run_agent_sync_consultative() {
 octopus_sync_timeout_override() {
     local caller_timeout="${1:-120}"
     local phase="${2:-}"
+    # Artifact analysis has one fixed call budget shared with its runtime claim.
+    [[ "$phase" != feature-analysis ]] || return 1
     local explicit_secs="${OCTOPUS_TIMEOUT_EXPLICIT_SECS:-}"
 
     # Council owns a resolved run-wide budget, including its outer watchdog.
@@ -1590,7 +1592,11 @@ ${provider_ctx}"
     local _sync_recovered_sigsegv=false
     local _sync_signal_artifact=""
     case "$agent_type" in
-        agy*|antigravity) _sync_sigsegv_retries=1 ;;
+        agy*|antigravity)
+            if [[ "$phase" != feature-analysis ]]; then
+                _sync_sigsegv_retries=1
+            fi
+            ;;
     esac
 
     while true; do

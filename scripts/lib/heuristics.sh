@@ -677,6 +677,9 @@ EOF
     fi
 
     log INFO "Synthesis complete: $synthesis_file"
+    if declare -F feature_workflow_research_completed >/dev/null 2>&1; then
+        feature_workflow_research_completed "$synthesis_file" "$synthesis_agent" "${RESEARCH_RUN_ID:-$task_group}" "$synthesis_degraded" || true
+    fi
 
     # v7.19.0 P2.3: Save to cache for reuse
     local cache_key

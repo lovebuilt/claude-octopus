@@ -119,3 +119,12 @@ scripts/lib/user-config.sh	tests/unit/test-setup-suggest-routing.sh tests/unit/t
 shared/process_supervisor.py	tests/unit/test-openai-compatible-agent.sh tests/unit/test-run-contract-v10.sh
 skills/*	tests/unit/test-public-reference-integrity.sh tests/integration/test-native-first-docs.sh tests/unit/test-argument-placeholder-safety.sh
 config/*	@full
+
+# Portable feature boundaries share the existing dispatcher and storage authority.
+scripts/helpers/feature-*.py	@full
+scripts/helpers/feature-workflow.sh	@full
+scripts/helpers/artifact-safety.py	tests/unit/test-feature-artifacts.sh tests/unit/test-safe-github-comments.sh
+scripts/lib/feature-*.sh	@full
+scripts/lib/engineering-methods.sh	@full
+scripts/safe-gh-comment.sh	tests/unit/test-safe-github-comments.sh tests/unit/test-feature-artifacts.sh
+tests/unit/test-feature-*.py	tests/unit/test-feature-*.sh

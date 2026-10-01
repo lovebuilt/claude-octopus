@@ -4,6 +4,9 @@ _octo_methods_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 octo_with_engineering_methods() {
     local phase="${1:-}" prompt="${2:-}" contract
+    if declare -F feature_workflow_prompt >/dev/null 2>&1; then
+        prompt="$(feature_workflow_prompt "$phase" "$prompt")" || return 1
+    fi
     case "$phase" in
         tangle|develop|review|ink|deliver|grasp|define) ;;
         *) printf '%s' "$prompt"; return 0 ;;
