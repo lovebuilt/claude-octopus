@@ -1231,13 +1231,17 @@ ${heuristic_ctx}"
         fi
         echo "# Started: $(date)" >> "$result_file"
         echo "" >> "$result_file"
-        local _untrusted_nonce=""
-        case "$agent_type" in codex*|gemini*|perplexity*|cursor-agent*|kimi*)
-            _untrusted_nonce=$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' 2>/dev/null) \
-                || _untrusted_nonce="${RANDOM}${RANDOM}${RANDOM}$(date +%s)"
-            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
-            ;;
-        esac
+        local _untrusted_nonce _nonce_pattern='^[0-9a-f]{32}$'
+        _untrusted_nonce=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || _untrusted_nonce=""
+        if [[ ! "$_untrusted_nonce" =~ $_nonce_pattern ]]; then
+            printf '## Output\n```\n(no provider launched)\n```\n## Status: FAILED (Unable to generate result nonce)\n' >> "$result_file"
+            octo_spawn_contract_finish "$_contract_seat_id" failed "$result_file" "" \
+                "Unable to generate result nonce" 74 "" >/dev/null 2>&1 || true
+            [[ -n "$metrics_id" ]] && record_agent_failure "$metrics_id" 0 \
+                "Unable to generate result nonce" failed 2>/dev/null || true
+            exit 74
+        fi
+        echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
         echo "## Output" >> "$result_file"
         echo '```' >> "$result_file"
 
@@ -1481,6 +1485,7 @@ ${heuristic_ctx}"
                 ;;
             *)
                 echo '```' >> "$result_file"
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
                 ;;
             esac
 
@@ -1506,9 +1511,15 @@ ${heuristic_ctx}"
             if [[ -s "$temp_errors" ]] && ! grep -q "^mcp startup:" "$temp_errors"; then
                 echo "" >> "$result_file"
                 echo "## Warnings/Errors" >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
                 echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             octo_append_runtime_identity "$result_file" "$agent_type" "${model:-unresolved}" "$raw_output"
@@ -1585,9 +1596,16 @@ ${heuristic_ctx}"
             echo "" >> "$result_file"
             echo "Provider process remained alive but showed no observable output or worktree progress within the configured stall window." >> "$result_file"
             if [[ -s "$temp_errors" ]]; then
-                printf '\n## Error Log\n```\n' >> "$result_file"
+                printf '\n## Error Log\n' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
+                echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             local end_time_ms elapsed_ms tokens_out
@@ -1651,9 +1669,15 @@ ${heuristic_ctx}"
             if [[ -s "$temp_errors" ]]; then
                 echo "" >> "$result_file"
                 echo "## Error Log" >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
                 echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             # v8.19.0: Record timeout error and save checkpoint
@@ -1713,9 +1737,15 @@ ${heuristic_ctx}"
             if [[ -s "$temp_errors" ]]; then
                 echo "" >> "$result_file"
                 echo "## Error Log" >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
                 echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             # v8.19.0: Record error for learning loop

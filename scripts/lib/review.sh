@@ -659,36 +659,35 @@ review_openai_compat_empty_output_retryable() {
     local agent_type="$2"
     [[ "$agent_type" == codex* ]] || return 1
     [[ -f "$result_file" ]] || return 1
-    local empty_count reconnect_count
-    empty_count=$(grep -cE '^## Status: FAILED \(Empty output\)' "$result_file" 2>/dev/null || true)
-    empty_count=${empty_count:-0}
+    local status reconnect_count
+    status=$(review_result_terminal_status "$result_file") || return 1
+    [[ "$status" == "## Status: FAILED (Empty output)" ]] || return 1
     reconnect_count=$(grep -c 'Reconnecting' "$result_file" 2>/dev/null || true)
     reconnect_count=${reconnect_count:-0}
-    [[ "${empty_count%%$'\n'*}" -gt 0 ]] || return 1
-    [[ "${reconnect_count%%$'\n'*}" -gt 0 ]] || return 1
+    [[ "${reconnect_count%%$'\n'*}" -gt 0 ]]
+}
+
+# Framed files select the first launcher terminal status outside provider text.
+# A malformed or incomplete frame must never use the legacy whole-file parser.
+review_result_terminal_status() {
+    local result_file="$1" framed_rc=0
+    [[ -f "$result_file" ]] || return 1
+    octo_result_framed_sections "$result_file" status && return 0 || framed_rc=$?
+    [[ "$framed_rc" -eq 2 ]] || return 1
+    awk '
+        /^## Status: (SUCCESS|FAILED|TIMEOUT)([[:space:](]|$)/ { status=$0 }
+        END { if (status != "") print status; else exit 1 }
+    ' "$result_file" 2>/dev/null
 }
 
 review_result_has_terminal_status() {
-    local result_file="$1"
-    local terminal_count
-    [[ -f "$result_file" ]] || return 1
-    terminal_count=$(grep -cE '^## Status: (SUCCESS|FAILED|TIMEOUT)([[:space:](]|$)' "$result_file" 2>/dev/null || true)
-    [[ "${terminal_count:-0}" -gt 0 ]]
+    review_result_terminal_status "$1" >/dev/null
 }
 
 review_result_completed_successfully() {
-    local result_file="$1"
-    local final_status
-    [[ -f "$result_file" ]] || return 1
-    final_status=$(awk '
-        /^## Status: (SUCCESS|FAILED|TIMEOUT)([[:space:](]|$)/ {
-            status = $0
-            sub(/^## Status: /, "", status)
-            sub(/[[:space:](].*$/, "", status)
-        }
-        END { print status }
-    ' "$result_file" 2>/dev/null || true)
-    [[ "$final_status" == "SUCCESS" ]]
+    local status success_pattern='^## Status: SUCCESS([[:space:](]|$)'
+    status=$(review_result_terminal_status "$1") || return 1
+    [[ "$status" =~ $success_pattern ]]
 }
 
 # Prefer the last stderr ERROR line, then stdout ERROR, then the existing
@@ -2123,10 +2122,7 @@ ${round1_prompts[$retry_idx]}"
                 retry_pid="$!"
                 review_wait_for_result_status "$retry_result_file" "$retry_pid" "Round 1 ${retry_agent_type}/${retry_role} retry" "$RESULTS_DIR" "$review_stall_window" "$review_poll_secs"
                 round1_files[$retry_idx]="$retry_result_file"
-                local retry_success_count
-                retry_success_count=$(grep -cE '^## Status: SUCCESS' "$retry_result_file" 2>/dev/null || true)
-                retry_success_count=${retry_success_count:-0}
-                if [[ -f "$retry_result_file" ]] && [[ "${retry_success_count%%$'\n'*}" -gt 0 ]]; then
+                if review_result_completed_successfully "$retry_result_file"; then
                     log INFO "review_run: ${retry_agent_type}/${retry_role} retry recovered after Empty output"
                 else
                     log WARN "review_run: ${retry_agent_type}/${retry_role} retry did not recover; continuing with partial Round 1"
@@ -2210,12 +2206,7 @@ ${round1_prompts[$retry_idx]}"
             ((_r1_failed++)) || true
             continue
         fi
-        local _rf_failed_status_count _rf_status_count
-        _rf_failed_status_count=$(grep -cE '^## Status: (FAILED|TIMEOUT)' "$_rf" 2>/dev/null || true)
-        _rf_failed_status_count=${_rf_failed_status_count:-0}
-        _rf_status_count=$(grep -c '^## Status:' "$_rf" 2>/dev/null || true)
-        _rf_status_count=${_rf_status_count:-0}
-        if [[ "${_rf_failed_status_count%%$'\n'*}" -gt 0 ]] || [[ "${_rf_status_count%%$'\n'*}" -eq 0 ]]; then
+        if ! review_result_completed_successfully "$_rf"; then
             ((_r1_failed++)) || true
         fi
     done

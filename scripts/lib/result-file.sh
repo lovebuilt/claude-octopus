@@ -19,6 +19,7 @@ write_agent_result_prompt() {
 # Return 2 for legacy files so callers can keep their compatibility parser.
 # In failure mode, preserve prompt lines for echoed-text filtering and quote
 # provider headings so they cannot become section delimiters in the selector.
+# Status mode accepts the first outer terminal status after complete Output.
 octo_result_framed_sections() {
     local result_file="$1" mode="${2:-output}"
     LC_ALL=C awk -v mode="$mode" '
@@ -38,9 +39,10 @@ octo_result_framed_sections() {
             remaining=$3+1
             next
         }
+        !framed && /^# Agent: / { agent=$0; sub(/^# Agent: /, "", agent); next }
         !framed { next }
         remaining > 0 {
-            prompt=append(prompt, "# Dispatched-Prompt-Line: " $0)
+            if (mode == "failure") prompt=append(prompt, "# Dispatched-Prompt-Line: " $0)
             remaining -= length($0)+1
             if (remaining < 0) { invalid=1; exit }
             next
@@ -50,15 +52,59 @@ octo_result_framed_sections() {
             else if ($0 !~ /^[[:space:]]*$/) { invalid=1; exit }
             next
         }
+        expect_output && $0 != "## Output" { invalid=1; exit }
         !seen_output && /^<!-- BEGIN-UNTRUSTED:/ {
+            if (end_marker != "" || $0 !~ /^<!-- BEGIN-UNTRUSTED:provider=.+:nonce=[0-9a-f]+ -->$/) { invalid=1; exit }
+            nonce=$0
+            sub(/^.*:nonce=/, "", nonce)
+            sub(/ -->$/, "", nonce)
+            if (length(nonce) != 16 && length(nonce) != 32) { invalid=1; exit }
+            if (agent != "" && index($0, "<!-- BEGIN-UNTRUSTED:provider=" agent ":nonce=") != 1) { invalid=1; exit }
+            expect_output=1
+            stderr_begin=$0
+            sub(/:nonce=/, ":stream=stderr:nonce=", stderr_begin)
             end_marker=$0
             sub(/BEGIN-UNTRUSTED/, "END-UNTRUSTED", end_marker)
             next
         }
-        !seen_output && /^## Output$/ { seen_output=1; section="output"; next }
+        !seen_output && /^## Output$/ { expect_output=0; seen_output=1; section="output"; next }
         section == "output" && end_marker != "" {
-            if ($0 == end_marker) { nonce_closed=1; section=""; next }
-            output=append(output, $0)
+            if ($0 == end_marker) { nonce_closed=1; output_done=1; section=""; next }
+            if (mode != "status") output=append(output, $0)
+            next
+        }
+        mode == "status" && section == "output" && end_marker == "" {
+            if (!output_fence && !output_done && $0 == "```") { output_fence=1; next }
+            if (output_fence) {
+                if ($0 == "```") { output_fence=0; output_done=1; section="" }
+                next
+            }
+            if (own_header($0)) { output_done=1; section="" }
+            else next
+        }
+        stderr_end != "" {
+            if ($0 == stderr_end) { stderr_end=""; section=""; next }
+            if (mode != "status" && section == "error") errors=append(errors, $0)
+            next
+        }
+        section != "output" && /^<!-- BEGIN-UNTRUSTED:.*:stream=stderr:/ {
+            if (!nonce_closed || $0 != stderr_begin) { invalid=1; exit }
+            stderr_pending=0
+            stderr_end=$0
+            sub(/BEGIN-UNTRUSTED/, "END-UNTRUSTED", stderr_end)
+            next
+        }
+        mode == "status" && seen_output && section != "output" {
+            if (stderr_fence) {
+                if ($0 == "```") { stderr_fence=0; section="" }
+                next
+            }
+            if (stderr_pending) {
+                if ($0 == "```") { stderr_fence=1; stderr_pending=0 }
+                next
+            }
+            if ($0 ~ /^## (Error Log|Warnings\/Errors|Errors)$/) { stderr_pending=1; next }
+            if (status == "" && output_done && $0 ~ /^## Status: (SUCCESS|FAILED|TIMEOUT)([[:space:](]|$)/) status=$0
             next
         }
         section == "output" && own_header($0) { section="" }
@@ -70,7 +116,10 @@ octo_result_framed_sections() {
             if (invalid) exit 1
             if (!framed) exit 2
             if (invalid || remaining != 0 || !started || !seen_output || (end_marker != "" && !nonce_closed)) exit 1
-            if (mode == "failure") {
+            if (mode == "status") {
+                if (!output_done || output_fence || stderr_fence || stderr_pending || stderr_end != "" || status == "") exit 1
+                print status
+            } else if (mode == "failure") {
                 if (prompt != "") print prompt
                 print "## Output"
                 n=split(output, lines, "\n")

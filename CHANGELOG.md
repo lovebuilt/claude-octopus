@@ -58,7 +58,9 @@
 - Review result parsing skips the exact dispatched prompt and reads the
   launcher's Output section. Headings echoed in a stderr transcript no longer
   replace real findings. An answered seat without findings JSON reports
-  incomplete coverage instead of a successful review.
+  incomplete coverage instead of a successful review. Terminal-status checks
+  also skip provider text, so echoed status headings cannot stop supervision,
+  turn a failed seat into a success, or trigger an empty-output retry.
 - Review debate requires a reason and code or contract evidence before it
   excludes a contested finding. Unsupported decisions retain the finding.
   The final artifact, reports, and debate audit keep excluded findings with
