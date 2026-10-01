@@ -94,10 +94,18 @@ else
 fi
 
 test_case "workflow loader reports missing cancellation helpers and clears its path variable"
-workflow_loader="$(sed -n '1,28p' "$PROJECT_ROOT/scripts/lib/workflows.sh")"
-if grep -Fq 'missing Tangle cancellation helpers' <<< "$workflow_loader" \
-   && grep -Fq 'unset _octo_review_lib' <<< "$workflow_loader" \
-   && grep -Fq 'Tangle cancellation helpers are unavailable' "$PROJECT_ROOT/scripts/lib/workflows.sh"; then
+loader_lib="$TEST_TMP_DIR/missing-cancellation/lib"
+loader_stderr="$TEST_TMP_DIR/missing-cancellation.stderr"
+mkdir -p "$loader_lib"
+cp "$PROJECT_ROOT/scripts/lib/"*.sh "$loader_lib/"
+rm "$loader_lib/review.sh"
+if bash -c '
+    unset -f review_kill_process_tree_frozen review_kill_descendants_frozen
+    source "$1" 2> "$2"
+    [[ -z "${_octo_review_lib+x}" ]]
+' _ "$loader_lib/workflows.sh" "$loader_stderr" \
+   && grep -Fxc "ERROR: missing Tangle cancellation helpers: $loader_lib/review.sh" \
+       "$loader_stderr" >/dev/null; then
     test_pass
 else
     test_fail "workflow cancellation helper loading can still fail silently"
