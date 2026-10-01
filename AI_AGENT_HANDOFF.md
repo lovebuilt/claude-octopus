@@ -2,6 +2,21 @@
 
 Last updated: 2026-09-07
 
+Current work fixes Aardvark's Linux cancellation finding on branch `work`.
+When per-thread procfs `children` files are unavailable, native process control
+now scans `/proc/*/stat` for matching PPIDs and propagates enumeration errors
+instead of treating an unsupported interface as an empty tree. Regression and
+real descendant-termination coverage pass 24/24; Tangle cancellation passes
+16/16. `bd` is unavailable in this checkout, so no tracker update was possible.
+`make ci-changed` selected the full matrix without a comparison base; its smoke
+phase passed, but the overloaded unit run developed unrelated timing and
+fixture failures and was interrupted after reporting 311/326 passing suites.
+The fix was committed locally as `19d8696`. This checkout has no configured Git
+remote or branch tracking information, so the required pull, push, and PR
+creation cannot be completed here. The exact next action is to configure the
+repository remote, push `work`, open the security-fix PR, and rerun the hosted
+full matrix on that pushed head.
+
 Status: the five orchestrator review fixes from `a3f7847d` are prepared for
 v11.2.1 on `release/v11.2.1`, tracking `oco-c3t`. Fix implementation task
 `oco-v6s` is complete. Local verification and final code review passed.

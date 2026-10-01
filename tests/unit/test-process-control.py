@@ -132,6 +132,20 @@ class ProcessControlTests(unittest.TestCase):
                 finally:
                     descendant.send(signal.SIGKILL)
 
+    def test_linux_missing_task_children_uses_proc_stat_fallback(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(Path, "glob", return_value=[]), \
+             mock.patch.object(control, "_linux_proc_children", return_value=[4343]) as fallback:
+            self.assertEqual(control.children(4242), [4343])
+        fallback.assert_called_once_with(4242)
+
+    def test_linux_fallback_failure_is_not_an_empty_child_list(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(Path, "glob", return_value=[]), \
+             mock.patch.object(control, "_linux_proc_children", side_effect=PermissionError("denied")):
+            with self.assertRaises(PermissionError):
+                control.children(4242)
+
     def test_linux_handle_is_closed_if_post_open_identity_changes(self):
         info = control.ProcessInfo(4242, 20, "before", 0, False)
         replacement = control.ProcessInfo(4242, 20, "after", 0, False)
