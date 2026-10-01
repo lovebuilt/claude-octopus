@@ -90,4 +90,46 @@ assert_file_has "$CODEX_REVIEW" 'Graphify' \
 assert_file_has "$CHANGELOG" 'Graphify' \
     "changelog notes Graphify companion"
 
+test_case "Graphify prompt context rejects symlinked reports and directories"
+graphify_fixture=$(mktemp -d)
+trap 'rm -rf "$graphify_fixture"' EXIT
+mkdir -p "$graphify_fixture/project/graphify-out" "$graphify_fixture/external"
+printf 'sensitive-value\n' > "$graphify_fixture/external/secret"
+ln -s "$graphify_fixture/external/secret" \
+    "$graphify_fixture/project/graphify-out/GRAPH_REPORT.md"
+# shellcheck source=/dev/null
+source "$GRAPHIFY_LIB"
+if [[ -z "$(octo_graphify_context_for_prompt "$graphify_fixture/project" 12000)" ]]; then
+    rm "$graphify_fixture/project/graphify-out/GRAPH_REPORT.md"
+    rmdir "$graphify_fixture/project/graphify-out"
+    ln -s "$graphify_fixture/external" "$graphify_fixture/project/graphify-out"
+    if [[ -z "$(octo_graphify_context_for_prompt "$graphify_fixture/project" 12000)" ]]; then
+        if [[ -z "$(GRAPHIFY_OUT=../external octo_graphify_context_for_prompt \
+                "$graphify_fixture/project" 12000)" ]] && \
+                [[ -z "$(GRAPHIFY_OUT="$graphify_fixture/external" \
+                octo_graphify_context_for_prompt "$graphify_fixture/project" 12000)" ]]; then
+            test_pass
+        else
+            test_fail "Graphify directory escaped the project root"
+        fi
+    else
+        test_fail "symlinked Graphify directory was read"
+    fi
+else
+    test_fail "symlinked Graphify report was read"
+fi
+
+test_case "Graphify prompt context is aggregate bounded and labels untrusted input"
+rm "$graphify_fixture/project/graphify-out"
+mkdir "$graphify_fixture/project/graphify-out"
+printf '%013000d\n%013000d\n' 0 0 > \
+    "$graphify_fixture/project/graphify-out/GRAPH_REPORT.md"
+graphify_context=$(octo_graphify_context_for_prompt "$graphify_fixture/project" 12000)
+if [[ ${#graphify_context} -le 12000 ]] && \
+        [[ "$graphify_context" == *"untrusted repository content"* ]]; then
+    test_pass
+else
+    test_fail "context exceeded aggregate limit or omitted the trust-boundary warning"
+fi
+
 test_summary

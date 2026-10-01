@@ -1,16 +1,16 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-27
-Status: v10.0.0 is released. Broader issue-pattern regression coverage and
-installed-package UAT are published in PR #971, with no private environment,
-network, authentication, or operational details in the public diff.
-Branch: `codex/issue-pattern-uat`, based on `upstream/main` `23554eff`.
+Status: Aardvark's Graphify report symlink disclosure is remediated on the
+current task branch. Graphify prompt context is confined to a non-symlinked
+directory beneath the physical project root, rejects symlinked reports, labels
+repository text as untrusted, and enforces an aggregate prompt-size bound.
+Branch: `work`, based on `46d64cba`.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
 updated for the post-release follow-ups.
-Next action: monitor PR #971's exact-head checks and resolve its review threads.
-Keep private UAT records out of commits and preserve unrelated dirty state in
-the coordination checkout.
+Next action: monitor the security-fix PR checks and review threads after push.
+Tracking remains unavailable because `bd` is not installed in this checkout.
 
 ## Reported-Issue Pattern UAT
 
