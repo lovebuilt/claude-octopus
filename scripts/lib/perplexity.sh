@@ -455,10 +455,16 @@ EOF
 
     # Map annotation URLs to search-result IDs without renumbering them.
     # When no reliable ID exists, list the URL without a numbered label.
+    # Read the answer from stdin JSON rather than putting it in process arguments.
     local citations=""
     if command -v jq &>/dev/null; then
-        citations=$(printf '%s' "$response" | jq -r --arg text "$content" '
-            [.output[]? | select(.type == "message") | .content[]? | .annotations[]? | select(.type == "url_citation") | .url] as $cited
+        citations=$(printf '%s' "$response" | jq -r '
+            select(type == "object" and .status == "completed" and .error == null)
+            | select(.output | type == "array")
+            | ([.output[] | select(.type == "message") | .content | select(type == "array")
+                | .[] | select(.type == "output_text") | .text | select(type == "string")]
+                | join("\n\n")) as $text
+            | [.output[]? | select(.type == "message") | .content[]? | .annotations[]? | select(.type == "url_citation") | .url] as $cited
             | ($cited | map(select(type == "string" and length > 0))) as $urls
             | [.output[]? | select(.type == "search_results") | .results[]?
                 | select(.url | type == "string" and length > 0)] as $results

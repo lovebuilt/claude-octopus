@@ -11,6 +11,14 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "Perplexity Agent API request and response handling"
 
 WORK_DIR="$(mktemp -d)"
+REAL_JQ="$(command -v jq)"
+mkdir -p "$WORK_DIR/bin"
+cat > "$WORK_DIR/bin/jq" <<'BASH'
+#!/usr/bin/env bash
+printf '%s\0' "$@" >> "$PPX_TEST_JQ_ARGV"
+exec "$PPX_TEST_REAL_JQ" "$@"
+BASH
+chmod +x "$WORK_DIR/bin/jq"
 
 # Runs perplexity_execute in a clean subshell with curl replaced by a stub that
 # records the URL and the -d payload, then prints the fixture file as the body.
@@ -18,9 +26,11 @@ WORK_DIR="$(mktemp -d)"
 # Records the request, stdout, logs, quota marker, and exit status in WORK_DIR.
 run_ppx() {
     local model="$1" fixture="$2" output_file="${3:-}"
-    rm -f "$WORK_DIR"/{url.txt,payload.json,out.txt,rc.txt,curl-called,log.txt,quota-dead}
+    rm -f "$WORK_DIR"/{url.txt,payload.json,out.txt,rc.txt,curl-called,log.txt,quota-dead,jq-argv}
     (
         export PERPLEXITY_API_KEY="test-key-not-real"
+        export PPX_TEST_REAL_JQ="$REAL_JQ" PPX_TEST_JQ_ARGV="$WORK_DIR/jq-argv"
+        export PATH="$WORK_DIR/bin:$PATH"
         VERBOSE=false
         log() { printf '%s %s\n' "$1" "$2" >> "$WORK_DIR/log.txt"; }
         octo_quota_mark_dead() { printf '%s' "$1" > "$WORK_DIR/quota-dead"; }
@@ -262,6 +272,42 @@ test_annotation_urls_without_result_ids_are_unnumbered() {
     done
 }
 
+test_answer_text_stays_off_jq_argv() {
+    test_case "generated answer text reaches jq through stdin rather than process arguments"
+    jq '.output[1].content[0].text = "INERT_PRIVATE_ANSWER_MARKER.[2]"' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-private.json"
+    run_ppx fast "$WORK_DIR/reply-private.json"
+    assert_equals "0" "$(cat "$WORK_DIR/rc.txt")" "exit status" || return 0
+    assert_contains "$(cat "$WORK_DIR/out.txt")" "INERT_PRIVATE_ANSWER_MARKER.[2]" "answer consumed" || return 0
+    if [[ ! -s "$WORK_DIR/jq-argv" ]]; then
+        test_fail "the executable jq wrapper did not record any arguments"
+    elif grep -Fq 'INERT_PRIVATE_ANSWER_MARKER' "$WORK_DIR/jq-argv"; then
+        test_fail "generated answer text appeared in jq process arguments"
+    else
+        test_pass
+    fi
+}
+
+test_large_completed_answer_keeps_sources() {
+    test_case "a completed answer above the platform argument limit retains Sources"
+    local answer_bytes
+    if [[ "$(uname -s)" == Darwin ]]; then
+        answer_bytes=$(( $(getconf ARG_MAX) + 8192 ))
+    else
+        answer_bytes=$(( 32 * $(getconf PAGESIZE) + 8192 ))
+    fi
+    jq ".output[1].content[0].text = ((\"x\" * $answer_bytes) + \".[web:2]\")" "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-large.json"
+    run_ppx high "$WORK_DIR/reply-large.json" "$WORK_DIR/saved-large.txt"
+    assert_equals "0" "$(cat "$WORK_DIR/rc.txt")" "exit status" || return 0
+    if [[ "$(wc -c < "$WORK_DIR/saved-large.txt")" -le "$answer_bytes" ]]; then
+        test_fail "the large completed answer was truncated"
+    elif ! grep -Fq '**Sources:**' "$WORK_DIR/saved-large.txt" \
+        || ! grep -Fqx '[web:2] https://example.com/search-b' "$WORK_DIR/saved-large.txt"; then
+        test_fail "the large answer lost its Sources footer or source ID"
+    else
+        test_pass
+    fi
+}
+
 test_posts_to_agent_endpoint || true
 test_sonar_pro_maps_to_fast_preset || true
 test_legacy_ids_follow_migration_guide || true
@@ -273,6 +319,8 @@ test_completed_response_saves_output || true
 test_partial_quota_failure_marks_provider_dead || true
 test_source_typed_and_noncontiguous_ids || true
 test_annotation_urls_without_result_ids_are_unnumbered || true
+test_answer_text_stays_off_jq_argv || true
+test_large_completed_answer_keeps_sources || true
 test_reads_text_and_cited_sources || true
 test_falls_back_to_search_results || true
 test_error_body_fails || true
