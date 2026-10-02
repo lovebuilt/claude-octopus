@@ -12,7 +12,7 @@ JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 URL_AUTH = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s@/:]*:[^\s@/]+@")
 AUTH_HEADER = re.compile(r"Authorization[\"']?\s*:\s*[\"']?(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+={0,2}", re.I)
 PRIVATE_START = re.compile(r'-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----')
-ASSIGNMENT = re.compile(r'''(?im)["']?\b([A-Za-z][A-Za-z0-9_]*(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|SECRET|PASSWORD|PRIVATE_KEY)|API_KEY|TOKEN|SECRET|PASSWORD)["']?\s*[:=]\s*(.*)''')
+ASSIGNMENT = re.compile(r'''(?im)["']?\b([A-Za-z][A-Za-z0-9_]*(?:API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|SECRET|PASSWORD|PRIVATE_KEY)|API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|TOKEN|SECRET|PASSWORD)["']?\s*[:=]\s*(.*)''')
 
 
 def placeholder(value):

@@ -155,6 +155,12 @@ class Artifacts(unittest.TestCase):
             ('eyJ' + 'a' * 10 + '.' + 'b' * 10 + '.' + 'c' * 10, 65, 65),
             ('https://user:unknown-inert-value@example.test', 65, 65),
         ]
+        for name in ('ACCESS_TOKEN', 'REFRESH_TOKEN', 'PRIVATE_KEY'):
+            for field in (name, name.lower(), name.title()):
+                cases.extend(((field + '=unknown-inert-value', 65, 0),
+                              ('"' + field + '":"unknown-inert-value"', 65, 0),
+                              (field + '=${' + name + '}', 0, 0),
+                              ('"' + field + '":"[REDACTED]"', 0, 0)))
         for text, full, recognizable in cases:
             for args, expected in (([], full), (['--recognizable-only'], recognizable)):
                 with self.subTest(text=text, args=args):
@@ -184,6 +190,25 @@ class Artifacts(unittest.TestCase):
                 self.assertFalse(value['withheld'])
                 self.assertIn('[REDACTED-AUTHORIZATION]', (self.root / value['path']).read_text())
                 self.assertNotIn(credential, (self.root / value['path']).read_text())
+
+    def test_publication_checks_bare_credential_fields_and_placeholders(self):
+        feature = self.allocate()['feature']
+        for name in ('ACCESS_TOKEN', 'REFRESH_TOKEN', 'PRIVATE_KEY'):
+            for field in (name, name.lower(), name.title()):
+                for value, withheld in (('unknown-inert-value', True),
+                                        ('"unknown-inert-value"', True),
+                                        ('${' + name + '}', False), ('"[REDACTED]"', False)):
+                    for text in (field + '=' + value, '"' + field + '":' + value):
+                        with self.subTest(text=text):
+                            self.draft.write_text(text + '\n')
+                            published = self.call('publish', '--feature', feature, '--kind', 'spec',
+                                                  '--input', str(self.draft), '--run-id', 'bare-field-fixture')
+                            self.assertEqual(published['withheld'], withheld)
+                            body = (self.root / published['path']).read_text()
+                            if withheld:
+                                self.assertNotIn('unknown-inert-value', body)
+                            else:
+                                self.assertIn(text, body)
 
     def test_publication_redacts_each_recognizable_credential(self):
         feature = self.allocate()['feature']
