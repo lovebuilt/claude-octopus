@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -54,6 +55,120 @@ Then an artifact exists.
         p = subprocess.run(['/bin/bash', str(ADAPTER), *args], cwd=self.root, env=self.env, capture_output=True, text=True)
         self.assertEqual(p.returncode, 0 if success else 1, p.stderr)
         return [json.loads(line) for line in p.stdout.splitlines() if line.startswith('{')][-1]
+
+    def test_prepare_without_runtime_context_returns_json(self):
+        before = set(self.root.rglob('*'))
+        stale = self.base / 'stale-selection.json'
+        stale.write_text('{"feature":"specs/999-stale","spec_path":"specs/999-stale/spec.md"}\n')
+        for unavailable in ['dry-run', 'stale-dry-run', 'python3', 'jq', 'project-root']:
+            with self.subTest(unavailable=unavailable):
+                env = dict(self.env)
+                if unavailable in ['dry-run', 'stale-dry-run']:
+                    env['DRY_RUN'] = 'true'
+                    if unavailable == 'stale-dry-run':
+                        env.update(FEATURE_SELECTION=str(stale), FEATURE_RUNTIME_DIR=str(self.base),
+                                   FEATURE_SOURCE_ROOT=str(self.base), FEATURE_ACTIVE='true',
+                                   FEATURE_SELECTED='specs/999-stale')
+                elif unavailable == 'project-root':
+                    env['OCTOPUS_PROJECT_DIR'] = str(self.base / 'missing')
+                else:
+                    binary_dir = self.base / ('without-' + unavailable)
+                    binary_dir.mkdir()
+                    for command in ['dirname', 'git', 'python3', 'jq']:
+                        if command != unavailable:
+                            (binary_dir / command).symlink_to(shutil.which(command))
+                    env['PATH'] = str(binary_dir)
+                result = subprocess.run(['/bin/bash', str(ADAPTER), 'prepare', 'spec', 'export'],
+                                        cwd=self.root, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout),
+                                 {'schema_version': 1, 'feature': None, 'feature_context': False})
+                self.assertIn('feature context unavailable', result.stderr)
+                self.assertNotIn('unbound variable', result.stderr)
+                self.assertEqual(set(self.root.rglob('*')), before)
+                self.assertFalse((self.base / 'runtime').exists())
+
+    def test_blocked_boundary_emits_native_questions_before_failure(self):
+        context = self.adapter('prepare', 'spec', 'export')
+        self.spec.write_text(self.spec.read_text() + '\n```octopus-clarifications\n' + json.dumps([{
+            'question': 'Which exports are in scope?', 'kind': 'user_decision', 'category': 'scope',
+            'umbrella': True, 'phases': ['plan', 'develop'], 'blocking_phases': ['plan', 'develop'],
+            'blocking_reason': 'The user must select the supported exports.'}]) + '\n```\n')
+        self.adapter('save', 'spec', str(self.spec), 'claude', 'unknown', 'boundary-run', context['feature'])
+        plan = self.root / context['feature'] / 'plan.md'
+        plan.write_text('Remove the public API.\n')
+        policy = json.loads(Path(context['policy_snapshot']).read_text())
+        findings = [{'source': 'AGENTS.md', 'digest': policy['digest'], 'line_start': 1, 'line_end': 1,
+                     'quote': 'Keep the public API stable.', 'plan_digest': hashlib.sha256(plan.read_bytes()).hexdigest(),
+                     'plan_line_start': 1, 'plan_line_end': 1, 'plan_action': 'Remove the public API.'}]
+        Path(context['runtime_dir'], 'policy-findings.json').write_text(json.dumps(findings))
+        result = self.adapter('boundary', 'develop', context['feature'], success=False)
+        self.assertTrue(result['feature_context'])
+        self.assertEqual(len(result['batch']), 1)
+        self.assertEqual(result['batch'][0]['question'], 'Which exports are in scope?')
+        self.assertTrue(result['markers'][0]['blocking_phases'])
+        self.assertIn('score', result)
+        self.assertIn('umbrella', result)
+
+    def orchestrator_dispatch(self, *args):
+        # Run the shipped startup and command parser. Stop only at the provider
+        # or human-review entry point, before any external work or approval.
+        interception = self.base / 'dispatch-interception.sh'
+        interception.write_text('''trap 'case "$BASH_COMMAND" in
+    "probe_discover "*|"probe_single_agent "*|"grasp_define "*|"tangle_develop "*|"ink_deliver "*|"tangle_verify "*|"embrace_full "*|"review_run "*|"council_run "*|list_pending_reviews|"approve_review "*)
+        printf "DISPATCH:%s|active=%s|ambiguous=%s|selected=%s|task=%s|root=%s|runtime=%s\\n" "$BASH_COMMAND" "${FEATURE_ACTIVE:-false}" "${FEATURE_AMBIGUOUS:-false}" "${FEATURE_SELECTED:-}" "${FEATURE_TASK_CONTRACT:-}" "${FEATURE_SOURCE_ROOT:-}" "${FEATURE_RUNTIME_DIR:-}"
+        exit 0 ;;
+esac' DEBUG
+''')
+        env = dict(self.env, BASH_ENV=str(interception), OCTOPUS_SKIP_PROVIDER_PROBES='true',
+                   OCTOPUS_REMOTE_SESSION='true', OCTOPUS_HOST='claude', CLAUDE_CODE='1',
+                   CLAUDE_OCTOPUS_WORKSPACE=str(self.home / 'runtime'),
+                   CODEX_HOME=str(self.home / 'codex'), CLAUDE_CONFIG_DIR=str(self.home / 'claude'))
+        for key in list(env):
+            if key.endswith(('_API_KEY', '_TOKEN')):
+                env.pop(key)
+        return subprocess.run(['/bin/bash', str(REPO / 'scripts/orchestrate.sh'), *args],
+                              cwd=self.root, env=env, capture_output=True, text=True, timeout=45)
+
+    def test_ambiguous_features_only_stop_binding_commands(self):
+        for ordinal, name in [(1, 'export'), (2, 'search')]:
+            feature = self.root / 'specs' / f'{ordinal:03d}-{name}'
+            feature.mkdir(parents=True)
+            (feature / 'spec.md').write_text(self.spec.read_text())
+        before = {str(path.relative_to(self.root)): path.read_bytes()
+                  for path in self.root.rglob('*') if path.is_file()}
+        unrelated = [('probe', 'Research unrelated caching'),
+                     ('probe-single', 'claude', 'security', 'fixture-task', 'Research unrelated caching'),
+                     ('research', 'Research unrelated caching'),
+                     ('discover', 'Research unrelated caching'),
+                     ('review', 'list'), ('review', 'approve', 'fixture-review'),
+                     ('council', 'Review unrelated caching'), ('code-review', '{}'),
+                     ('deliver', 'Validate unrelated change'), ('ink', 'Validate unrelated change'),
+                     ('verify', 'Diagnose unrelated change'), ('verification-only', 'Diagnose unrelated change')]
+        for args in unrelated:
+            with self.subTest(args=args):
+                result = self.orchestrator_dispatch(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('DISPATCH:', result.stdout)
+                self.assertIn('|active=false|ambiguous=true|selected=|task=', result.stdout)
+                self.assertIn('|root=' + str(self.root) + '|runtime=' + str(self.home / 'runtime'), result.stdout)
+                self.assertIn('multiple features found', result.stderr)
+                after = {str(path.relative_to(self.root)): path.read_bytes()
+                         for path in self.root.rglob('*') if path.is_file()}
+                self.assertEqual(after, before)
+        for command in ['define', 'grasp', 'develop', 'tangle', 'embrace', 'agent-resume']:
+            with self.subTest(command=command):
+                args = [command] if command == 'agent-resume' else [command, 'Build export']
+                result = self.orchestrator_dispatch(*args)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertNotIn('DISPATCH:', result.stdout)
+                self.assertRegex(result.stderr, 'multiple features found|Several repository features exist')
+        self.env['OCTOPUS_FEATURE'] = 'specs/002-search'
+        selected = self.orchestrator_dispatch('develop', 'Build search')
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        self.assertIn('|active=true|ambiguous=false|selected=specs/002-search|', selected.stdout)
+        self.assertFalse((self.root / 'specs/001-export/feature.json').exists())
+        self.assertTrue((self.root / 'specs/002-search/feature.json').exists())
 
     def test_legacy_layout_and_configured_policy_environment(self):
         (self.root / 'PROJECT.md').write_text('Preserve exports.\n')

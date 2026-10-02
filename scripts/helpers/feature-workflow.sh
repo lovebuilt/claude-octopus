@@ -7,6 +7,14 @@ PROJECT_ROOT="${OCTOPUS_PROJECT_DIR:-$PWD}"
 operation="${1:-}"
 shift || true
 
+# These values describe one binding, not input configuration for a new host call.
+case "$operation" in
+    prepare|boundary)
+        unset FEATURE_SELECTION FEATURE_RUNTIME_DIR FEATURE_SOURCE_ROOT FEATURE_POLICY_SNAPSHOT \
+            FEATURE_ACTIVE FEATURE_AMBIGUOUS FEATURE_SELECTED FEATURE_SPEC_PATH FEATURE_ID FEATURE_TASK_CONTRACT
+        ;;
+esac
+
 case "$operation" in
     prepare)
         phase="${1:-spec}"
@@ -15,6 +23,11 @@ case "$operation" in
         create=false
         [[ "$phase" != spec ]] || create=true
         feature_workflow_begin "$phase" "$name" "$create"
+        if [[ -z "${FEATURE_SELECTION:-}" || ! -f "$FEATURE_SELECTION" || -z "${FEATURE_RUNTIME_DIR:-}" ]]; then
+            feature_workflow_warning 'feature context unavailable; continuing legacy workflow'
+            printf '{"schema_version":1,"feature":null,"feature_context":false}\n'
+            exit 0
+        fi
         jq -c --arg runtime_dir "$FEATURE_RUNTIME_DIR" --arg policy_snapshot "${FEATURE_POLICY_SNAPSHOT:-}" \
             '. + {runtime_dir:$runtime_dir,policy_snapshot:$policy_snapshot}' "$FEATURE_SELECTION"
         ;;
@@ -24,16 +37,18 @@ case "$operation" in
         feature_workflow_begin "$phase" feature false
         [[ "${FEATURE_AMBIGUOUS:-false}" != true ]] || exit 1
         feature_workflow_refresh_clarifications || true
+        rc=0
         if [[ "$phase" == develop ]]; then
-            feature_workflow_preimplement
+            feature_workflow_preimplement || rc=$?
         else
-            feature_workflow_gate "$phase"
+            feature_workflow_gate "$phase" || rc=$?
         fi
-        if [[ -f "${FEATURE_RUNTIME_DIR}/clarifications.json" ]]; then
+        if [[ -n "${FEATURE_RUNTIME_DIR:-}" && -f "${FEATURE_RUNTIME_DIR}/clarifications.json" ]]; then
             jq -c '{feature_context:true,batch:.batch,score:.score,markers:.markers,umbrella:.umbrella}' "${FEATURE_RUNTIME_DIR}/clarifications.json"
         else
             printf '{"feature_context":false,"batch":[]}\n'
         fi
+        exit "$rc"
         ;;
     save)
         [[ $# -ge 6 ]] || exit 64
