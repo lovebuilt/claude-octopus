@@ -117,13 +117,33 @@ Before research, allocate or select the portable feature and bind project policy
 
 ```bash
 OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-${HOME}/.claude-octopus/plugin}"
-FEATURE_CONTEXT=$(bash "$OCTO_ROOT/scripts/helpers/feature-workflow.sh" prepare spec "<project name>" "<explicit filename or feature, empty when omitted>")
+unset FEATURE_CONTEXT FEATURE_DIR SPEC_PATH FEATURE_RUNTIME_DIR FEATURE_SELECTOR POLICY_SNAPSHOT SPEC_RESEARCH_RUN
+if ! command -v jq >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+  echo "Spec workflow stopped: jq and Python 3 are required to record accepted research and publish safely" >&2
+  exit 1
+fi
+FEATURE_CONTEXT=$(bash "$OCTO_ROOT/scripts/helpers/feature-workflow.sh" prepare spec "<project name>" "<explicit filename or feature, empty when omitted>") || {
+  echo "Spec workflow stopped: feature preparation failed" >&2
+  exit 1
+}
+if ! jq -e 'type == "object" and
+  (.spec_path | type == "string" and length > 0 and . != "null") and
+  (.runtime_dir | type == "string" and length > 0 and . != "null") and
+  (.feature == null or (.feature | type == "string" and . != "null"))' <<< "$FEATURE_CONTEXT" >/dev/null; then
+  echo "Spec workflow stopped: feature context has no usable spec or runtime path; accepted research and safe publication are required" >&2
+  exit 1
+fi
 FEATURE_DIR=$(jq -r '.feature // empty' <<< "$FEATURE_CONTEXT")
-SPEC_PATH=$(jq -r '.spec_path' <<< "$FEATURE_CONTEXT")
-FEATURE_RUNTIME_DIR=$(jq -r '.runtime_dir' <<< "$FEATURE_CONTEXT")
+SPEC_PATH=$(jq -r '.spec_path // empty' <<< "$FEATURE_CONTEXT")
+FEATURE_RUNTIME_DIR=$(jq -r '.runtime_dir // empty' <<< "$FEATURE_CONTEXT")
+if [[ ! -d "$FEATURE_RUNTIME_DIR" || ! -w "$FEATURE_RUNTIME_DIR" ]] ||
+  ! FEATURE_RUNTIME_DIR=$(cd -- "$FEATURE_RUNTIME_DIR" && pwd -P) || [[ "$FEATURE_RUNTIME_DIR" == / ]]; then
+  echo "Spec workflow stopped: runtime directory is unavailable or unsafe; accepted research cannot be recorded" >&2
+  exit 1
+fi
 FEATURE_SELECTOR="${FEATURE_DIR:-$SPEC_PATH}"
-POLICY_SNAPSHOT=$(jq -r '.policy_snapshot' <<< "$FEATURE_CONTEXT")
-SPEC_RESEARCH_RUN="spec-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+POLICY_SNAPSHOT=$(jq -r '.policy_snapshot // empty' <<< "$FEATURE_CONTEXT")
+SPEC_RESEARCH_RUN="spec-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || exit 1
 ```
 
 Pass the selected policy's numbered passages and digest to synthesis and challenge seats. Report the source and passed-over candidates. A missing source warns and proceeds. Do not create a constitution. A policy observation needs exact source and action quotations before it can be a verified conflict.
@@ -131,6 +151,8 @@ Pass the selected policy's numbered passages and digest to synthesis and challen
 When retaining an existing root spec for the first time, offer a one-time migration of the spec chain to a feature directory. Keep the files in place until the user explicitly requests that move. Record that the offer was shown in the host workflow state so repeated runs do not ask again.
 
 The adapter automatically allocates `specs/NNN-slug/`. Existing root `spec.md`, explicit filenames, and Spec Kit features retain their layout. `OCTOPUS_FEATURE_LAYOUT=legacy` keeps root behavior. Report allocation fallback reasons.
+
+A legacy selection can continue when it includes usable spec and runtime paths. If preparation cannot supply those paths, stop and report the missing dependency or runtime failure. Restore it before retrying. Do not guess another feature, create a replacement runtime directory, or bypass the accepted-run receipt and shared writer.
 
 **DO NOT PROCEED TO STEP 4 until state and feature context are read.**
 

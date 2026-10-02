@@ -122,6 +122,8 @@ AskUserQuestion({
 
 Build options dynamically from detected providers. Only show providers that are installed/configured:
 
+For Claude, fill the resolved default from the active cost mode and installed CLI, preserving configured pins. Sonnet 5.5 requires Claude Code 2.1.284+ and Opus 5.5 requires 2.1.280+. Older clients use their supported fallback.
+
 ```
 AskUserQuestion({
   questions: [{
@@ -130,7 +132,7 @@ AskUserQuestion({
     multiSelect: false,
     options: [
       // Always show:
-      {label: "🔵 Claude", description: "Current: claude-sonnet-5-5 / claude-opus-5-5 (claude-opus-5 and legacy fallbacks available) — built-in, no config needed"},
+      {label: "🔵 Claude", description: "Resolved default: <resolved_claude_default>. Built-in provider."},
       // Only if codex installed:
       {label: "🔴 Codex (OpenAI)", description: "Current: <current_model> — handles implementation, reasoning"},
       // Only if agy installed:
@@ -306,7 +308,7 @@ AskUserQuestion({
     multiSelect: true,
     options: [
       // Only show installed/configured providers
-      {label: "🔵 Claude (Sonnet 5.5 / Opus 5.5)", description: "Moderator — instruction-following, synthesis"},
+      {label: "🔵 Claude (Sonnet / Opus)", description: "Moderator. Resolved default: <resolved_claude_default>."},
       {label: "🔴 Codex (GPT-5.6 Sol)", description: "Independent implementation and edge-case review"},
       {label: "🧭 Antigravity (agy)", description: "Alternate model perspective via Antigravity CLI"},
       {label: "🟠 OpenRouter: GLM-5", description: "Code review specialist — quality focus"},

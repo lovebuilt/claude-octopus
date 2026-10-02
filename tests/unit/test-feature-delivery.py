@@ -400,16 +400,155 @@ class SpecInstructionAcceptance(unittest.TestCase):
         self.runtime.mkdir()
         self.text = (REPO / '.claude/skills/flow-spec/SKILL.md').read_text()
 
-    def snippet(self, step):
+    def snippet(self, step, block=0):
         section = self.text.split('### STEP ' + step + ':', 1)[1]
-        return section.split('```bash\n', 1)[1].split('```', 1)[0]
+        return section.split('```bash\n')[block + 1].split('```', 1)[0]
 
-    def execute(self, code, prefix=''):
+    def execute(self, code, prefix='', overrides=None, cwd=None):
         env = dict(os.environ, FEATURE_RUNTIME_DIR=str(self.runtime),
                    SPEC_RESEARCH_RUN='current-spec-run', OCTO_ROOT=str(self.root / 'plugin'),
                    FEATURE_SELECTOR='specs/001-example', SPEC_AUTHOR_PROVIDER='claude')
+        env.update(overrides or {})
         return subprocess.run(['bash', '-c', prefix + '\n' + code], env=env,
-                              capture_output=True, text=True, timeout=10)
+                              cwd=cwd or self.root, capture_output=True, text=True, timeout=10)
+
+    def binding(self):
+        return self.snippet('3', 1).replace('<project name>', 'example').replace(
+            '<explicit filename or feature, empty when omitted>', '')
+
+    def prepare_fixture(self, context):
+        plugin = self.root / 'plugin'
+        (plugin / 'scripts/helpers').mkdir(parents=True, exist_ok=True)
+        (self.root / 'context.json').write_text(json.dumps(context))
+        (plugin / 'scripts/helpers/feature-workflow.sh').write_text('cat "$PWD/context.json"\n')
+        (plugin / 'scripts/orchestrate.sh').write_text('touch "$PWD/dispatched"\n')
+        return {'CLAUDE_PLUGIN_ROOT': str(plugin)}
+
+    def test_prepare_missing_context_or_paths_stops_before_research(self):
+        valid = dict(feature='', spec_path='spec.md', runtime_dir=str(self.runtime))
+        invalid = [None, {}, dict(schema_version=1, feature=None, feature_context=False)]
+        for field in ['spec_path', 'runtime_dir']:
+            for value in [None, '', 'null', 0]:
+                invalid.append(dict(valid, **{field: value}))
+            invalid.append({key: value for key, value in valid.items() if key != field})
+        invalid += [dict(valid, runtime_dir='/'), dict(valid, runtime_dir='null/missing'),
+                    dict(valid, runtime_dir=str(self.root / 'missing')),
+                    dict(valid, feature='null'), dict(valid, feature=12)]
+        for context in invalid:
+            with self.subTest(context=context):
+                env = self.prepare_fixture(context)
+                stale = 'FEATURE_DIR=specs/999-stale\nSPEC_PATH=stale.md\nPOLICY_SNAPSHOT=stale.json\n'
+                ran = self.execute(self.binding() + '\n' + self.snippet('4'), stale, env)
+                self.assertNotEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertIn('Spec workflow stopped', ran.stdout + ran.stderr)
+                self.assertFalse((self.root / 'dispatched').exists())
+                self.assertFalse((self.root / 'null').exists())
+
+    def test_prepare_failure_and_missing_dependencies_stop_before_research(self):
+        env = self.prepare_fixture({})
+        helper = self.root / 'plugin/scripts/helpers/feature-workflow.sh'
+        for prefix, script in [('', 'exit 1\n'), ('', 'printf "invalid json\\n"\n'),
+                               ('command() { [[ "$1" != -v || "$2" != jq ]] || return 1; builtin command "$@"; }', 'exit 0\n'),
+                               ('command() { [[ "$1" != -v || "$2" != python3 ]] || return 1; builtin command "$@"; }', 'exit 0\n')]:
+            with self.subTest(prefix=prefix, script=script):
+                helper.write_text(script)
+                ran = self.execute(self.binding() + '\n' + self.snippet('4'), prefix, env)
+                self.assertNotEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertIn('Spec workflow stopped', ran.stdout + ran.stderr)
+                self.assertFalse((self.root / 'dispatched').exists())
+
+    def test_prepare_valid_legacy_explicit_and_portable_paths_replace_stale_binding(self):
+        for feature, path in [('', 'spec.md'), (None, 'custom-spec.md'),
+                              ('specs/001-example', 'specs/001-example/spec.md')]:
+            with self.subTest(feature=feature, path=path):
+                context = dict(feature=feature, spec_path=path, runtime_dir=str(self.runtime),
+                               policy_snapshot=None, feature_context=False)
+                env = self.prepare_fixture(context)
+                report = '\nprintf "%s\\n" "$FEATURE_SELECTOR" "$SPEC_PATH" "$FEATURE_RUNTIME_DIR" "policy=$POLICY_SNAPSHOT" "$SPEC_RESEARCH_RUN"\n'
+                ran = self.execute(self.binding() + report,
+                                   'FEATURE_DIR=specs/999-stale\nSPEC_PATH=stale.md\nPOLICY_SNAPSHOT=stale.json', env)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                lines = ran.stdout.splitlines()
+                self.assertEqual(lines[:4], [feature or path, path, str(self.runtime.resolve()), 'policy='])
+                self.assertRegex(lines[4], r'^spec-[a-f0-9]{32}$')
+
+    def test_real_prepare_preserves_non_git_root_explicit_and_portable_selections(self):
+        plugin = self.root / 'plugin'
+        (plugin / 'scripts/helpers').mkdir(parents=True)
+        helper = REPO / 'scripts/helpers/feature-workflow.sh'
+        (plugin / 'scripts/helpers/feature-workflow.sh').write_text('exec bash "' + str(helper) + '" "$@"\n')
+        (plugin / 'scripts/orchestrate.sh').write_text('touch "$OCTOPUS_PROJECT_DIR/dispatched"\n')
+        for case, selected, path in [('non-git', '', 'spec.md'), ('root', '', 'spec.md'),
+                                     ('explicit', '', 'custom-spec.md'),
+                                     ('portable', 'specs/001-example', 'specs/001-example/spec.md')]:
+            with self.subTest(case=case):
+                project = self.root / case
+                project.mkdir()
+                if case != 'non-git':
+                    subprocess.run(['git', 'init', '-q', str(project)], check=True, capture_output=True)
+                if case == 'root':
+                    (project / 'spec.md').write_text('Existing root specification\n')
+                code = self.binding()
+                if case == 'explicit':
+                    code = code.replace('prepare spec "example" ""', 'prepare spec "example" "custom-spec.md"')
+                env = dict(CLAUDE_PLUGIN_ROOT=str(plugin), OCTOPUS_PROJECT_DIR=str(project),
+                           CLAUDE_OCTOPUS_WORKSPACE=str(self.runtime), OCTOPUS_FEATURE='',
+                           OCTOPUS_FEATURE_LAYOUT='auto', DRY_RUN='false')
+                report = '\nprintf "%s\\n" "$FEATURE_SELECTOR" "$SPEC_PATH"\n'
+                ran = self.execute(code + '\n' + self.snippet('4') + report, overrides=env)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertEqual(ran.stdout.splitlines(), [selected or path, path])
+                self.assertTrue((project / 'dispatched').is_file())
+                self.assertFalse((project / 'null').exists())
+
+    def test_real_prepare_resolves_existing_relative_runtime_before_dispatch(self):
+        plugin = self.root / 'plugin'
+        (plugin / 'scripts/helpers').mkdir(parents=True)
+        helper = REPO / 'scripts/helpers/feature-workflow.sh'
+        (plugin / 'scripts/helpers/feature-workflow.sh').write_text('exec bash "' + str(helper) + '" "$@"\n')
+        (plugin / 'scripts/orchestrate.sh').write_text('printf "%s\\n" "$FEATURE_RUNTIME_DIR" > "$PWD/dispatched-runtime"\n')
+        project = self.root / 'relative-workspace'
+        project.mkdir()
+        env = dict(CLAUDE_PLUGIN_ROOT=str(plugin), OCTOPUS_PROJECT_DIR=str(project),
+                   WORKSPACE_DIR='runtime', OCTOPUS_FEATURE='', OCTOPUS_FEATURE_LAYOUT='auto', DRY_RUN='false')
+        code = self.binding() + '\n' + self.snippet('4') + '\nprintf "%s\\n" "$FEATURE_CONTEXT" "$FEATURE_RUNTIME_DIR"\n'
+        ran = self.execute(code, overrides=env, cwd=project)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        context, bound_runtime = ran.stdout.splitlines()
+        prepared = json.loads(context)
+        self.assertEqual(prepared['spec_path'], 'spec.md')
+        self.assertTrue(prepared['runtime_dir'].startswith('runtime/projects/'))
+        expected = (project / prepared['runtime_dir']).resolve()
+        self.assertTrue(expected.is_dir())
+        self.assertEqual(bound_runtime, str(expected))
+        self.assertEqual((project / 'dispatched-runtime').read_text().strip(), str(expected))
+        self.assertFalse((project / 'null').exists())
+
+    def test_real_prepare_unavailable_context_cannot_reuse_inherited_binding(self):
+        blocked_runtime = self.root / 'blocked-runtime'
+        blocked_runtime.write_text('not a directory')
+        helper = REPO / 'scripts/helpers/feature-workflow.sh'
+        for reason, prefix, extra in [
+            ('dry run', '', {'DRY_RUN': 'true'}),
+            ('missing Python', 'command() { [[ "$1" != -v || "$2" != python3 ]] || return 1; builtin command "$@"; }; export -f command', {}),
+            ('missing jq', 'command() { [[ "$1" != -v || "$2" != jq ]] || return 1; builtin command "$@"; }; export -f command', {}),
+            ('runtime failure', '', {'OCTOPUS_WORKFLOW_STATE_DIR': str(blocked_runtime)})
+        ]:
+            with self.subTest(reason=reason):
+                env = dict(OCTOPUS_PROJECT_DIR=str(self.root), CLAUDE_OCTOPUS_WORKSPACE=str(self.runtime),
+                           FEATURE_SELECTION=str(self.root / 'stale-selection.json'),
+                           FEATURE_SOURCE_ROOT='/stale-root', FEATURE_ACTIVE='true',
+                           FEATURE_SELECTED='specs/999-stale', FEATURE_SPEC_PATH='stale.md', **extra)
+                (self.root / 'stale-selection.json').write_text(json.dumps(dict(
+                    feature='specs/999-stale', spec_path='stale.md')))
+                ran = self.execute('bash "' + str(helper) + '" prepare spec example', prefix, env)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                context = json.loads(ran.stdout)
+                self.assertEqual(context, dict(schema_version=1, feature=None, feature_context=False))
+                fixture_env = self.prepare_fixture(context)
+                stopped = self.execute(self.binding() + '\n' + self.snippet('4'), overrides=fixture_env)
+                self.assertNotEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+                self.assertFalse((self.root / 'dispatched').exists())
 
     def test_receipt_rejects_other_runs_degraded_missing_and_invalid_results(self):
         result = self.root / 'accepted.md'
