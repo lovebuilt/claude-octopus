@@ -10,7 +10,10 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 
 test_suite "Perplexity Agent API request and response handling"
 
-WORK_DIR="$(mktemp -d)"
+WORK_DIR="$TEST_TMP_DIR/perplexity-agent-api"
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p "$WORK_DIR"
 REAL_JQ="$(command -v jq)"
 mkdir -p "$WORK_DIR/bin"
 cat > "$WORK_DIR/bin/jq" <<'BASH'
@@ -178,14 +181,36 @@ test_unknown_model_refused_before_request() {
 
 test_quota_probe_uses_agent_endpoint() {
     test_case "the quota probe posts to /v1/agent with tools disabled"
-    local qw="$PROJECT_ROOT/scripts/lib/quota-watcher.sh"
-    if grep -q 'https://api.perplexity.ai/v1/agent' "$qw" \
-        && grep -q '"max_tool_calls":0' "$qw" \
-        && ! grep -q 'api.perplexity.ai/chat/completions' "$qw"; then
-        test_pass
-    else
-        test_fail "quota-watcher.sh perplexity probe is not on the Agent API"
-    fi
+    rm -f "$WORK_DIR"/probe-{url,method,payload,rc}.txt
+    (
+        export PERPLEXITY_API_KEY="test-key-not-real"
+        source "$PROJECT_ROOT/scripts/lib/quota-watcher.sh"
+        octo_quota_is_dead() { return 1; }
+        octo_quota_mark_dead() { return 99; }
+        curl() {
+            local prev="" arg
+            for arg in "$@"; do
+                case "$prev" in
+                    -X) printf '%s' "$arg" > "$WORK_DIR/probe-method.txt" ;;
+                    -d) printf '%s' "$arg" > "$WORK_DIR/probe-payload.txt" ;;
+                esac
+                case "$arg" in
+                    https://*) printf '%s' "$arg" > "$WORK_DIR/probe-url.txt" ;;
+                esac
+                prev="$arg"
+            done
+            printf '200'
+        }
+        set +e
+        octo_provider_probe perplexity
+        printf '%s' "$?" > "$WORK_DIR/probe-rc.txt"
+    )
+    assert_equals "0" "$(cat "$WORK_DIR/probe-rc.txt")" "probe exit" || return 0
+    assert_equals "https://api.perplexity.ai/v1/agent" "$(cat "$WORK_DIR/probe-url.txt")" "probe URL" || return 0
+    assert_equals "POST" "$(cat "$WORK_DIR/probe-method.txt")" "probe method" || return 0
+    assert_equals '{"preset":"fast","input":"hi","max_output_tokens":1,"max_tool_calls":0}' \
+        "$(jq -c . "$WORK_DIR/probe-payload.txt")" "probe payload" || return 0
+    test_pass
 }
 
 test_presets_keep_their_tools() {
