@@ -3,7 +3,10 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
-python3 - "$PROJECT_ROOT" <<'PY'
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
+test_suite "feature policy"
+test_case "actual Python helper acceptance"
+if python3 - "$PROJECT_ROOT" <<'PY'
 import copy
 import hashlib
 import json
@@ -44,6 +47,13 @@ class PolicyTests(unittest.TestCase):
         if configured is not None:
             args.extend(["--configured", configured])
         return self.call(*args)
+
+    def test_empty_configured_policy_is_omitted(self):
+        self.write("AGENTS.md", "Preserve files.\n")
+        selected = self.bind("")
+        self.assertEqual(selected["source"], "AGENTS.md")
+        self.assertFalse(any(item["path"] == "" for item in selected["candidates"]))
+        self.assertFalse(any("unsafe-path ()" in warning for warning in selected["warnings"]))
 
     def evidence(self):
         self.write("AGENTS.md", "# Guidance\nDo not deploy automatically.\nPreserve unrelated files.\n")
@@ -268,3 +278,9 @@ class PolicyTests(unittest.TestCase):
 
 unittest.main(argv=["feature-policy"], verbosity=2)
 PY
+then
+    test_pass
+else
+    test_fail "Python acceptance failed"
+fi
+test_summary

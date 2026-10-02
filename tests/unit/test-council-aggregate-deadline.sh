@@ -318,7 +318,7 @@ test_later_phases_skip_before_preparation_when_expired() {
                 cross-critique) council_run_critique_phase ;;
                 revision-after-critique) council_run_revision_phase ;;
             esac
-            [[ "$COUNCIL_DEADLINE_HIT" == true && -z "$COUNCIL_LAST_DISPATCH_TIMEOUT_PROVENANCE" ]]
+            [[ "$COUNCIL_DEADLINE_HIT" == true && -z "$COUNCIL_LAST_DISPATCH_TIMEOUT_PROVENANCE" ]] &&
             [[ ! -e "$COUNCIL_RUN_DIR/preparation-started" && ! -e "$COUNCIL_RUN_DIR/provider-started" ]]
         ); then
             test_fail "$phase dispatched after its aggregate budget was spent"

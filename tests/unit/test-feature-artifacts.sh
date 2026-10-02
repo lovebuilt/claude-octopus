@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-python3 "$root/tests/unit/test-feature-artifacts.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
+test_suite "feature artifacts"
+test_case "actual Python helper acceptance"
+if python3 "$PROJECT_ROOT/tests/unit/test-feature-artifacts.py"; then
+    test_pass
+else
+    test_fail "Python acceptance failed"
+fi
+test_summary

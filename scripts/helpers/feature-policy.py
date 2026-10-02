@@ -126,7 +126,7 @@ def bind(root, configured=None):
     result = {"schema_version": 1, "source": None, "digest": None, "text": None,
               "passages": [], "candidates": [], "warnings": []}
     paths = [".specify/memory/constitution.md"]
-    if configured is not None:
+    if configured:
         paths.append(configured)
     paths.extend(DEFAULTS)
     paths = list(dict.fromkeys(paths))

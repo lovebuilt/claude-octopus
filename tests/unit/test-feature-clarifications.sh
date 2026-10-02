@@ -3,7 +3,10 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
-python3 - "$PROJECT_ROOT" <<'PY'
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
+test_suite "feature clarifications"
+test_case "actual Python helper acceptance"
+if python3 - "$PROJECT_ROOT" <<'PY'
 import json
 from pathlib import Path
 import subprocess
@@ -364,3 +367,9 @@ class ClarificationTests(unittest.TestCase):
 
 unittest.main(argv=["feature-clarifications"], verbosity=2)
 PY
+then
+    test_pass
+else
+    test_fail "Python acceptance failed"
+fi
+test_summary
