@@ -115,7 +115,7 @@ Then an artifact exists.
         # or human-review entry point, before any external work or approval.
         interception = self.base / 'dispatch-interception.sh'
         interception.write_text('''trap 'case "$BASH_COMMAND" in
-    "probe_discover "*|"probe_single_agent "*|"grasp_define "*|"tangle_develop "*|"ink_deliver "*|"tangle_verify "*|"embrace_full "*|"review_run "*|"council_run "*|list_pending_reviews|"approve_review "*)
+    "probe_discover "*|"probe_single_cli "*|"probe_single_agent "*|"grasp_define "*|"tangle_develop "*|"ink_deliver "*|"tangle_verify "*|"embrace_full "*|"review_run "*|"council_run "*|list_pending_reviews|"approve_review "*)
         printf "DISPATCH:%s|active=%s|ambiguous=%s|selected=%s|task=%s|root=%s|runtime=%s\\n" "$BASH_COMMAND" "${FEATURE_ACTIVE:-false}" "${FEATURE_AMBIGUOUS:-false}" "${FEATURE_SELECTED:-}" "${FEATURE_TASK_CONTRACT:-}" "${FEATURE_SOURCE_ROOT:-}" "${FEATURE_RUNTIME_DIR:-}"
         exit 0 ;;
 esac' DEBUG
