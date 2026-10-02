@@ -77,6 +77,16 @@ Plus, usually:
 - Unit test in `tests/unit/test-<provider>-provider.sh`
 - `docs/DEVELOPER.md` / README provider tables
 
+## Perplexity Agent API
+
+Perplexity requests use `POST /v1/agent`. Legacy Sonar model names map to
+Perplexity's recommended presets; explicit `provider/model` names enable the
+`web_search` tool. Bare `fast`, `low`, `medium`, `high`, and `xhigh` values
+select a preset and inherit its tools. Selecting `xhigh` enables Perplexity's
+remote code sandbox, web search, and finance search. Preset tools merge with
+request tools, so an empty `tools` array does not disable them. See
+[Perplexity's preset configuration](https://docs.perplexity.ai/docs/agent-api/presets).
+
 ## Kimi Code integration
 
 Kimi Code exercises all seven wiring points: `kimi` identity/runtime rows in

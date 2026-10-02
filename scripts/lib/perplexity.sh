@@ -350,11 +350,14 @@ orcarouter_execute() {
 # PERPLEXITY AGENT API (v8.24.0 - Issue #22; Agent API since Sonar retirement)
 # Web-grounded research provider — live internet search with citations
 # Env: PERPLEXITY_API_KEY required
-# Endpoint: POST https://api.perplexity.ai/v1/agent. Perplexity ended Sonar chat
-#   completions support on 2026-09-27; /chat/completions now answers HTTP 403.
+# Endpoint: POST https://api.perplexity.ai/v1/agent. Sonar chat completions
+#   support ended on 2026-09-27; synchronous calls are gradually reformulated
+#   as Agent API requests. This provider uses the Agent API directly.
 # Models: sonar-pro, sonar (mapped to Agent API presets per Perplexity's
 #   migration guide), a bare preset (fast|low|medium|high|xhigh), or an explicit
-#   provider/model id such as perplexity/sonar (sent with the web_search tool)
+#   provider/model id such as perplexity/sonar (sent with the web_search tool).
+#   Presets inherit Perplexity's tools; explicitly choosing xhigh enables
+#   Perplexity's remote code sandbox as well as web and finance search.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 perplexity_execute() {
@@ -438,25 +441,37 @@ EOF
         return 1
     fi
 
-    # Extract the answer from the Agent API's typed output array: every
-    # output_text part of every message item (Agent API replies carry no
-    # top-level text field in the raw JSON).
+    # Only a completed run with no API error may supply a successful answer.
+    # Failed and incomplete runs can still contain partial output_text parts.
     local content=""
     if command -v jq &>/dev/null; then
-        content=$(printf '%s' "$response" | jq -re '[.output[]? | select(.type == "message") | .content[]? | select(.type == "output_text") | .text // empty] | join("\n\n") | select(length > 0)' 2>/dev/null) || content=""
+        content=$(printf '%s' "$response" | jq -re '
+            select(type == "object" and .status == "completed" and .error == null)
+            | .output | select(type == "array")
+            | [.[] | select(.type == "message") | .content | select(type == "array")
+                | .[] | select(.type == "output_text") | .text | select(type == "string")]
+            | join("\n\n") | select(length > 0)' 2>/dev/null) || content=""
     fi
 
-    # Citations: url_citation annotations on the answer text when present,
-    # otherwise the URLs of the search_results output item (what Sonar's
-    # top-level "citations" array used to carry). De-duplicated, order kept.
+    # Map annotation URLs to search-result IDs without renumbering them.
+    # When no reliable ID exists, list the URL without a numbered label.
     local citations=""
     if command -v jq &>/dev/null; then
-        citations=$(printf '%s' "$response" | jq -r '
+        citations=$(printf '%s' "$response" | jq -r --arg text "$content" '
             [.output[]? | select(.type == "message") | .content[]? | .annotations[]? | select(.type == "url_citation") | .url] as $cited
-            | (if ($cited | length) > 0 then $cited else [.output[]? | select(.type == "search_results") | .results[]? | .url] end)
-            | map(select(type == "string" and length > 0))
-            | reduce .[] as $u ([]; if any(.[]; . == $u) then . else . + [$u] end)
-            | to_entries[] | "[\(.key + 1)] \(.value)"' 2>/dev/null) || true
+            | ($cited | map(select(type == "string" and length > 0))) as $urls
+            | [.output[]? | select(.type == "search_results") | .results[]?
+                | select(.url | type == "string" and length > 0)] as $results
+            | (if ($urls | length) > 0 then
+                [$urls[] as $url | ($results | map(select(.url == $url))) as $matches
+                    | if ($matches | length) > 0 then $matches[] else {url: $url} end]
+                else $results end)
+            | map({url, id: (.id | if type == "number" and . > 0 and floor == . then tostring
+                elif type == "string" and test("^[1-9][0-9]*$") then . else null end)})
+            | reduce .[] as $source ([]; if any(.[]; . == $source) then . else . + [$source] end)
+            | .[] | .id as $id | if $id == null then "- \(.url)"
+                elif ($text | contains("[web:\($id)]")) then "[web:\($id)] \(.url)"
+                else "[\(.id)] \(.url)" end' 2>/dev/null) || true
     fi
 
     if [[ -z "$content" ]]; then
@@ -474,9 +489,9 @@ EOF
             log ERROR "Perplexity error: ${_ppx_err}"
             return 1
         fi
-        # Content missing but no parseable error — surface the raw body and fail
+        # No completed answer and no parseable error: surface the body and fail
         # so the agent is marked FAILED instead of "succeeding" with JSON noise.
-        log ERROR "Perplexity response had no message content ($model)"
+        log ERROR "Perplexity response was not a completed answer ($model)"
         echo "$response"
         return 1
     else

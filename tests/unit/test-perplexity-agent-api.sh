@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # tests/unit/test-perplexity-agent-api.sh
 # perplexity_execute talks to the Perplexity Agent API (POST /v1/agent).
-# Perplexity ended Sonar chat completions support on 2026-09-27; the old
-# /chat/completions path answers HTTP 403. These tests stub curl, so they never
-# reach the network and need no key.
+# These tests stub curl, so they never reach the network and need no key.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -16,14 +14,16 @@ WORK_DIR="$(mktemp -d)"
 
 # Runs perplexity_execute in a clean subshell with curl replaced by a stub that
 # records the URL and the -d payload, then prints the fixture file as the body.
-# Usage: run_ppx <model> <fixture-file>; leaves url.txt, payload.json, out.txt, rc.txt
+# Usage: run_ppx <model> <fixture-file> [output-file]
+# Records the request, stdout, logs, quota marker, and exit status in WORK_DIR.
 run_ppx() {
-    local model="$1" fixture="$2"
-    rm -f "$WORK_DIR"/{url.txt,payload.json,out.txt,rc.txt,curl-called}
+    local model="$1" fixture="$2" output_file="${3:-}"
+    rm -f "$WORK_DIR"/{url.txt,payload.json,out.txt,rc.txt,curl-called,log.txt,quota-dead}
     (
         export PERPLEXITY_API_KEY="test-key-not-real"
         VERBOSE=false
-        log() { :; }
+        log() { printf '%s %s\n' "$1" "$2" >> "$WORK_DIR/log.txt"; }
+        octo_quota_mark_dead() { printf '%s' "$1" > "$WORK_DIR/quota-dead"; }
         source "$PROJECT_ROOT/scripts/lib/utils.sh" >/dev/null 2>&1
         source "$PROJECT_ROOT/scripts/lib/perplexity.sh" >/dev/null 2>&1
         curl() {
@@ -40,7 +40,7 @@ run_ppx() {
             cat "$fixture"
         }
         local rc=0
-        perplexity_execute "$model" "What changed in AI agents this week?" > "$WORK_DIR/out.txt" 2>/dev/null || rc=$?
+        perplexity_execute "$model" "What changed in AI agents this week?" "$output_file" > "$WORK_DIR/out.txt" 2>/dev/null || rc=$?
         echo "$rc" > "$WORK_DIR/rc.txt"
     ) </dev/null
 }
@@ -52,10 +52,9 @@ cat > "$WORK_DIR/reply-annotated.json" <<'JSON'
     {"id":1,"url":"https://example.com/search-a","title":"A","snippet":"a"},
     {"id":2,"url":"https://example.com/search-b","title":"B","snippet":"b"}]},
   {"type":"message","role":"assistant","status":"completed","content":[
-    {"type":"output_text","text":"Agents gained long-running tools.","annotations":[
-      {"type":"url_citation","url":"https://example.com/cited-1","title":"One","start_index":0,"end_index":6},
-      {"type":"url_citation","url":"https://example.com/cited-2","title":"Two","start_index":7,"end_index":12},
-      {"type":"url_citation","url":"https://example.com/cited-1","title":"One again","start_index":13,"end_index":20}]}]}],
+    {"type":"output_text","text":"B supports this claim.[2] A supports the next claim.[1]","annotations":[
+      {"type":"url_citation","url":"https://example.com/search-b","title":"B","start_index":22,"end_index":25},
+      {"type":"url_citation","url":"https://example.com/search-a","title":"A","start_index":52,"end_index":55}]}]}],
  "usage":{"input_tokens":120,"output_tokens":9,"cost":{"total_cost":0.00141,"currency":"USD"}}}
 JSON
 
@@ -66,7 +65,7 @@ cat > "$WORK_DIR/reply-search-only.json" <<'JSON'
     {"id":1,"url":"https://example.com/search-a"},
     {"id":2,"url":"https://example.com/search-b"},
     {"id":3,"url":"https://example.com/search-a"}]},
-  {"type":"message","role":"assistant","content":[{"type":"output_text","text":"PONG","annotations":[]}]}]}
+  {"type":"message","role":"assistant","content":[{"type":"output_text","text":"A.[3] B.[2] A again.[1]","annotations":[]}]}]}
 JSON
 
 cat > "$WORK_DIR/reply-error.json" <<'JSON'
@@ -128,21 +127,20 @@ test_reads_text_and_cited_sources() {
     run_ppx sonar-pro "$WORK_DIR/reply-annotated.json"
     local out; out=$(cat "$WORK_DIR/out.txt")
     assert_equals "0" "$(cat "$WORK_DIR/rc.txt")" "exit status" &&
-    assert_contains "$out" "Agents gained long-running tools." "answer text" &&
-    assert_contains "$out" "[1] https://example.com/cited-1" "first citation" &&
-    assert_contains "$out" "[2] https://example.com/cited-2" "second citation" &&
-    assert_not_contains "$out" "[3]" "duplicate citation removed" &&
-    assert_not_contains "$out" "search-a" "search results not listed when the text cites sources" && test_pass
+    assert_contains "$out" "B supports this claim.[2] A supports the next claim.[1]" "answer text" &&
+    assert_contains "$out" "[1] https://example.com/search-a" "A keeps its result ID" &&
+    assert_contains "$out" "[2] https://example.com/search-b" "B keeps its result ID" &&
+    assert_not_contains "$out" "[1] https://example.com/search-b" "B is not renumbered" && test_pass
 }
 
 test_falls_back_to_search_results() {
-    test_case "with no annotations, sources are the de-duplicated search_results URLs"
+    test_case "with no annotations, sources retain result IDs even when URLs repeat"
     run_ppx fast "$WORK_DIR/reply-search-only.json"
     local out; out=$(cat "$WORK_DIR/out.txt")
-    assert_contains "$out" "PONG" "answer text" &&
+    assert_contains "$out" "A.[3] B.[2] A again.[1]" "answer markers preserved" &&
     assert_contains "$out" "[1] https://example.com/search-a" "first source" &&
     assert_contains "$out" "[2] https://example.com/search-b" "second source" &&
-    assert_not_contains "$out" "[3]" "duplicate source removed" && test_pass
+    assert_contains "$out" "[3] https://example.com/search-a" "same URL keeps its other result ID" && test_pass
 }
 
 test_error_body_fails() {
@@ -180,11 +178,101 @@ test_quota_probe_uses_agent_endpoint() {
     fi
 }
 
+test_presets_keep_their_tools() {
+    test_case "bare presets retain the configured preset and its provider-managed tools"
+    local preset
+    for preset in fast low medium high xhigh; do
+        run_ppx "$preset" "$WORK_DIR/reply-annotated.json"
+        assert_equals "$preset" "$(jq -r .preset "$WORK_DIR/payload.json")" "preset mapping" || return 0
+        assert_equals "null" "$(jq -c .tools "$WORK_DIR/payload.json")" "preset tools are inherited" || return 0
+    done
+    test_pass
+}
+
+test_rejects_unfinished_and_invalid_responses_before_write() {
+    local variant
+    for variant in failed incomplete cancelled in_progress queued failed-error completed-error missing-status malformed missing-output empty-output nonarray-output nonstring-text empty-text; do
+        test_case "$variant response cannot overwrite a saved result"
+        case "$variant" in
+            failed|incomplete|cancelled|in_progress|queued)
+                jq --arg status "$variant" '.status = $status' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            failed-error) jq '.status = "failed" | .error = {message: "Generation stopped", type: "server_error"}' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            completed-error) jq '.error = {message: "Generation stopped", type: "server_error"}' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            missing-status) jq 'del(.status)' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            malformed) printf '{"status":"completed",' > "$WORK_DIR/reply-invalid.json" ;;
+            missing-output) jq 'del(.output)' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            empty-output) jq '.output = []' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            nonarray-output) jq '.output = {message: "bad shape"}' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            nonstring-text) jq '.output[1].content[0].text = 42' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+            empty-text) jq '.output[1].content[0].text = ""' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-invalid.json" ;;
+        esac
+        printf 'saved sentinel\n' > "$WORK_DIR/saved.txt"
+        run_ppx fast "$WORK_DIR/reply-invalid.json" "$WORK_DIR/saved.txt"
+        assert_not_equals "0" "$(cat "$WORK_DIR/rc.txt")" "exit status" &&
+        assert_equals "saved sentinel" "$(cat "$WORK_DIR/saved.txt")" "saved output survives" && test_pass
+    done
+}
+
+test_completed_response_saves_output() {
+    test_case "a completed response with null error writes its typed text"
+    printf 'saved sentinel\n' > "$WORK_DIR/saved.txt"
+    run_ppx fast "$WORK_DIR/reply-annotated.json" "$WORK_DIR/saved.txt"
+    assert_equals "0" "$(cat "$WORK_DIR/rc.txt")" "exit status" &&
+    assert_contains "$(cat "$WORK_DIR/saved.txt")" "B supports this claim.[2]" "answer saved" &&
+    assert_contains "$(cat "$WORK_DIR/saved.txt")" "**Sources:**" "sources saved" && test_pass
+}
+
+test_partial_quota_failure_marks_provider_dead() {
+    test_case "partial text cannot hide a terminal quota error"
+    jq -c '.status = "failed" | .error = {message: "No quota left", type: "insufficient_quota", code: 401}' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-quota.json"
+    printf 'saved sentinel\n' > "$WORK_DIR/saved.txt"
+    run_ppx fast "$WORK_DIR/reply-quota.json" "$WORK_DIR/saved.txt"
+    assert_not_equals "0" "$(cat "$WORK_DIR/rc.txt")" "exit status" &&
+    assert_equals "saved sentinel" "$(cat "$WORK_DIR/saved.txt")" "saved output survives" &&
+    assert_equals "perplexity" "$(cat "$WORK_DIR/quota-dead" 2>/dev/null)" "provider marked dead" &&
+    assert_contains "$(cat "$WORK_DIR/log.txt")" "TerminalQuotaError" "quota error logged" && test_pass
+}
+
+test_source_typed_and_noncontiguous_ids() {
+    test_case "source-typed markers keep noncontiguous search-result IDs"
+    jq '.output[0].results[0].id = 4 | .output[0].results[1].id = 9 | .output[1].content[0].text = "B.[web:9] A.[web:4]"' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-typed.json"
+    run_ppx high "$WORK_DIR/reply-typed.json"
+    local out; out=$(cat "$WORK_DIR/out.txt")
+    assert_contains "$out" "B.[web:9] A.[web:4]" "answer markers preserved" &&
+    assert_contains "$out" "[web:4] https://example.com/search-a" "A source label" &&
+    assert_contains "$out" "[web:9] https://example.com/search-b" "B source label" &&
+    assert_not_contains "$out" "[1]" "no invented consecutive ID" && test_pass
+}
+
+test_annotation_urls_without_result_ids_are_unnumbered() {
+    local variant
+    for variant in absent invalid; do
+        test_case "annotation URLs with $variant result IDs stay unnumbered"
+        if [[ "$variant" == absent ]]; then
+            jq 'del(.output[0])' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-urls.json"
+        else
+            jq '.output[0].results[0].id = "source_a" | .output[0].results[1].id = null' "$WORK_DIR/reply-annotated.json" > "$WORK_DIR/reply-urls.json"
+        fi
+        run_ppx fast "$WORK_DIR/reply-urls.json"
+        local out; out=$(cat "$WORK_DIR/out.txt")
+        assert_contains "$out" "**Sources:**" "Sources header" &&
+        assert_contains "$out" "- https://example.com/search-a" "A URL" &&
+        assert_contains "$out" "- https://example.com/search-b" "B URL" &&
+        assert_not_contains "$out" "[1] https://" "no invented numbered source" && test_pass
+    done
+}
+
 test_posts_to_agent_endpoint || true
 test_sonar_pro_maps_to_fast_preset || true
 test_legacy_ids_follow_migration_guide || true
 test_explicit_model_adds_web_search_tool || true
 test_prompt_is_json_escaped || true
+test_presets_keep_their_tools || true
+test_rejects_unfinished_and_invalid_responses_before_write || true
+test_completed_response_saves_output || true
+test_partial_quota_failure_marks_provider_dead || true
+test_source_typed_and_noncontiguous_ids || true
+test_annotation_urls_without_result_ids_are_unnumbered || true
 test_reads_text_and_cited_sources || true
 test_falls_back_to_search_results || true
 test_error_body_fails || true

@@ -4,19 +4,23 @@
 
 ### Fixed
 
-- The Perplexity provider works again. Perplexity ended Sonar chat
-  completions support on 2026-09-27, and `/chat/completions` now answers
-  HTTP 403, so every Perplexity seat failed. `perplexity_execute` now posts to
-  the Agent API (`POST /v1/agent`): the prompt goes in `input`, the research
-  system text in `instructions`, and `OCTOPUS_PERPLEXITY_MAX_TOKENS` in
+- The Perplexity provider now uses the Agent API directly. Sonar chat
+  completions support ended on 2026-09-27; Perplexity is gradually
+  reformulating synchronous and streaming Sonar calls as Agent API requests.
+  `perplexity_execute` posts to `/v1/agent`. The prompt goes in `input`,
+  the research system text in `instructions`, and `OCTOPUS_PERPLEXITY_MAX_TOKENS` in
   `max_output_tokens`. `sonar` and `sonar-pro` map to the `fast` preset,
   `sonar-reasoning-pro` to `low` and `sonar-deep-research` to `high`, as
   Perplexity's migration guide recommends; a bare preset name passes through,
-  and a `provider/model` id such as `perplexity/sonar` is sent as `model` with
+  with Perplexity's preset tools. Explicitly selecting `xhigh` enables
+  Perplexity's remote code sandbox, web search and finance search. A
+  `provider/model` id such as `perplexity/sonar` is sent as `model` with
   the `web_search` tool. Any other value is refused before a request is sent.
-  The answer is read from the typed `output` items and the Sources list from
-  `url_citation` annotations, falling back to the `search_results` URLs. The
-  quota probe uses the same endpoint with tool calls disabled.
+  Only completed responses without an API error can write an answer.
+  The Sources list preserves `search_results` IDs, including source-typed
+  markers such as `[web:1]`. Annotation URLs without a reliable result ID
+  appear as unnumbered links. The quota probe uses the same endpoint with
+  tool calls disabled.
 - `orchestrate.sh --dry-run parallel <tasks.json>` no longer reports every task
   as a failed spawn. A dry-run spawn prints the command it would run but no
   provider PID, and parallel execution still waited for one, so each valid task
