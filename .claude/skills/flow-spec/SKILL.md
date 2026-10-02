@@ -145,7 +145,7 @@ FEATURE_DIR=$(jq -r '.feature // empty' <<< "$FEATURE_CONTEXT")
 SPEC_PATH=$(jq -r '.spec_path // empty' <<< "$FEATURE_CONTEXT")
 FEATURE_RUNTIME_DIR=$(jq -r '.runtime_dir // empty' <<< "$FEATURE_CONTEXT")
 if [[ ! -d "$FEATURE_RUNTIME_DIR" || ! -w "$FEATURE_RUNTIME_DIR" ]] ||
-  ! FEATURE_RUNTIME_DIR=$(cd -- "$FEATURE_RUNTIME_DIR" && pwd -P) || [[ "$FEATURE_RUNTIME_DIR" == / ]]; then
+  ! FEATURE_RUNTIME_DIR=$(CDPATH= cd -- "$FEATURE_RUNTIME_DIR" && pwd -P) || [[ "$FEATURE_RUNTIME_DIR" == / ]]; then
   echo "Spec workflow stopped: runtime directory is unavailable or unsafe; accepted research cannot be recorded" >&2
   exit 1
 fi

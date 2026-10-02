@@ -501,7 +501,7 @@ class SpecInstructionAcceptance(unittest.TestCase):
                 self.assertTrue((project / 'dispatched').is_file())
                 self.assertFalse((project / 'null').exists())
 
-    def test_real_prepare_resolves_existing_relative_runtime_before_dispatch(self):
+    def assert_relative_runtime_binding(self, cdpath):
         plugin = self.root / 'plugin'
         (plugin / 'scripts/helpers').mkdir(parents=True)
         helper = REPO / 'scripts/helpers/feature-workflow.sh'
@@ -510,19 +510,28 @@ class SpecInstructionAcceptance(unittest.TestCase):
         project = self.root / 'relative-workspace'
         project.mkdir()
         env = dict(CLAUDE_PLUGIN_ROOT=str(plugin), OCTOPUS_PROJECT_DIR=str(project),
-                   WORKSPACE_DIR='runtime', OCTOPUS_FEATURE='', OCTOPUS_FEATURE_LAYOUT='auto', DRY_RUN='false')
+                   WORKSPACE_DIR='runtime', OCTOPUS_FEATURE='', OCTOPUS_FEATURE_LAYOUT='auto', DRY_RUN='false',
+                   CDPATH=cdpath)
         code = self.binding() + '\n' + self.snippet('4') + '\nprintf "%s\\n" "$FEATURE_CONTEXT" "$FEATURE_RUNTIME_DIR"\n'
         ran = self.execute(code, overrides=env, cwd=project)
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        context, bound_runtime = ran.stdout.splitlines()
+        lines = ran.stdout.splitlines()
+        self.assertEqual(len(lines), 2, ran.stdout)
+        context, bound_runtime = lines
         prepared = json.loads(context)
         self.assertEqual(prepared['spec_path'], 'spec.md')
         self.assertTrue(prepared['runtime_dir'].startswith('runtime/projects/'))
         expected = (project / prepared['runtime_dir']).resolve()
         self.assertTrue(expected.is_dir())
         self.assertEqual(bound_runtime, str(expected))
-        self.assertEqual((project / 'dispatched-runtime').read_text().strip(), str(expected))
+        self.assertEqual((project / 'dispatched-runtime').read_text().splitlines(), [str(expected)])
         self.assertFalse((project / 'null').exists())
+
+    def test_real_prepare_resolves_existing_relative_runtime_before_dispatch(self):
+        self.assert_relative_runtime_binding('')
+
+    def test_real_prepare_relative_runtime_ignores_exported_cdpath(self):
+        self.assert_relative_runtime_binding('.')
 
     def test_real_prepare_unavailable_context_cannot_reuse_inherited_binding(self):
         blocked_runtime = self.root / 'blocked-runtime'
