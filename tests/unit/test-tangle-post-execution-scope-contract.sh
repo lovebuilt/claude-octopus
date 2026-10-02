@@ -260,6 +260,8 @@ check_tangle_worktree_changes() {
 exact_violations=$(tangle_changed_paths_outside_write_scopes \
     '1. [CODING] Edit source — Files: src/existing.ts, package.json — Creates: web/ — Task: edit declared files.' "$BEFORE")
 eval "$saved_changed_paths_function"
+# Compare exact paths independently of the host's collation order.
+exact_violations=$(printf '%s\n' "$exact_violations" | LC_ALL=C sort)
 if [[ "$exact_violations" == $'Web/other.js\npackage.json/child\nsrc\nsrc/Existing.ts' ]]; then
     test_pass
 else
