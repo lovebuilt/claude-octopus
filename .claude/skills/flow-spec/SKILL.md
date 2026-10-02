@@ -292,7 +292,7 @@ For an unresolved decision that belongs to the user, emit `[NEEDS CLARIFICATION:
 
 **After generating the NLSpec draft but BEFORE validation, challenge its completeness using a different provider.** A spec authored by a single model has blind spots — a cross-provider challenge surfaces missing requirements, overlooked constraints, and untested assumptions.
 
-Stage the spec draft in `$FEATURE_RUNTIME_DIR/spec-draft.md`. Set `SPEC_AUTHOR_PROVIDER` to the actual draft author's provider, such as `claude`, `codex` or `agy`. Use the active host's identity, including Codex for the generated Codex skill. The selection below excludes that provider. An unknown author skips external dispatch. Run the challenge synchronously and read its exact completed artifact:
+Stage the spec draft in `$FEATURE_RUNTIME_DIR/spec-draft.md`. Set `SPEC_AUTHOR_PROVIDER` to the actual draft author's provider. The external selector accepts `claude`, `claude-sdk`, `anthropic-api`, `codex` and `agy`. Use the active host's identity, including Codex for the generated Codex skill. The selection below excludes that provider. Other or unknown author identities skip external dispatch and use the Sonnet fallback below. Run the challenge synchronously and read its exact completed artifact:
 
 ```bash
 challenge_task="challenge-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"

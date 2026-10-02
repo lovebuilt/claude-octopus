@@ -18,7 +18,7 @@ Resume a previously-running Claude agent by ID. Picks up the agent's transcript 
 Before looking for a transcript or machine-local `.octo` state, inspect portable feature artifacts:
 
 ```bash
-OCTO_ROOT="${HOME}/.claude-octopus/plugin"
+OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-${HOME}/.claude-octopus/plugin}"
 python3 "$OCTO_ROOT/scripts/helpers/feature-contract.py" resume --root "$(pwd -P)" --explicit "<feature directory or spec path, empty when omitted>"
 ```
 

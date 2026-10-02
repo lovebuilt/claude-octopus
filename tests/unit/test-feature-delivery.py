@@ -645,5 +645,68 @@ class SpecInstructionAcceptance(unittest.TestCase):
         self.assertFalse((self.runtime / 'dispatched-provider').exists())
         self.assertIn('Spec author unknown', ran.stdout)
 
+class PluginRootInstructionAcceptance(unittest.TestCase):
+    SOURCES = [('.claude/skills/flow-develop/SKILL.md', '## Portable feature boundary'),
+               ('.claude/skills/flow-develop/flow-develop.tmpl', '## Portable feature boundary'),
+               ('.claude/skills/skill-resume/SKILL.md', '## Repository feature recovery'),
+               ('commands/resume.md', '## Repository feature recovery')]
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='octopus-plugin-root-')
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.home = self.base / 'home'
+        self.home.mkdir()
+
+    def assert_selected_helpers(self, mode):
+        if mode != 'override':
+            (self.home / '.claude-octopus').mkdir()
+            target = REPO
+            if mode == 'override-precedence':
+                target = self.base / 'unusable-plugin'
+                target.mkdir()
+            (self.home / '.claude-octopus/plugin').symlink_to(target, target_is_directory=True)
+        for index, (source, heading) in enumerate(self.SOURCES):
+            with self.subTest(mode=mode, source=source):
+                project = self.base / str(index)
+                feature = project / 'specs/001-example'
+                feature.mkdir(parents=True)
+                spec = '# Export specification\n\n## Behaviors\n[NEEDS CLARIFICATION: Which users may export?]\n'
+                (feature / 'spec.md').write_text(spec)
+                section = (REPO / source).read_text().split(heading, 1)[1]
+                code = section.split('```bash\n', 1)[1].split('```', 1)[0].replace(
+                    '<feature directory or spec path, empty when omitted>', 'specs/001-example')
+                env = {key: value for key, value in os.environ.items()
+                       if not key.startswith('FEATURE_') and key not in
+                       ['CLAUDE_PLUGIN_ROOT', 'OCTOPUS_WORKFLOW_STATE_DIR', 'WORKSPACE_DIR']}
+                env.update(HOME=str(self.home), OCTOPUS_PROJECT_DIR=str(project),
+                           OCTOPUS_FEATURE='specs/001-example', CLAUDE_OCTOPUS_WORKSPACE=str(self.base / 'runtime'),
+                           DRY_RUN='false')
+                if mode != 'default':
+                    env['CLAUDE_PLUGIN_ROOT'] = str(REPO)
+                ran = subprocess.run(['bash', '-c', code], cwd=project, env=env,
+                                     capture_output=True, text=True, timeout=20)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                payload = json.loads(ran.stdout.splitlines()[-1])
+                if heading == '## Repository feature recovery':
+                    self.assertEqual(payload['feature'], 'specs/001-example')
+                    self.assertEqual(payload['phase'], 'spec')
+                    self.assertEqual(payload['artifacts']['spec']['text'], spec)
+                    self.assertEqual(payload['artifacts']['spec']['path'], 'specs/001-example/spec.md')
+                else:
+                    self.assertTrue(payload['feature_context'])
+                    self.assertEqual([item['question'] for item in payload['batch']], ['Which users may export?'])
+                    self.assertEqual(payload['markers'][0]['status'], 'open')
+
+    def test_override_runs_boundary_and_recovery_without_stable_plugin_link(self):
+        self.assert_selected_helpers('override')
+
+    def test_override_takes_precedence_over_unusable_stable_plugin_link(self):
+        self.assert_selected_helpers('override-precedence')
+
+    def test_default_stable_plugin_link_runs_boundary_and_recovery(self):
+        self.assert_selected_helpers('default')
+
+
 if __name__ == '__main__':
     unittest.main()

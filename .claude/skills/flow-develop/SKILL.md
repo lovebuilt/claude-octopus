@@ -48,7 +48,7 @@ do not invoke the current command recursively or add provider calls from a seat.
 Before implementation, select the existing feature and run its boundary adapter:
 
 ```bash
-OCTO_ROOT="${HOME}/.claude-octopus/plugin"
+OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-${HOME}/.claude-octopus/plugin}"
 bash "$OCTO_ROOT/scripts/helpers/feature-workflow.sh" boundary develop "${OCTOPUS_FEATURE:-}"
 ```
 
