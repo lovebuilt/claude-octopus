@@ -112,7 +112,7 @@ rc=0
 if [[ "$EXEC_MODE" == tangle ]]; then
     _tangle_develop_in_workspace 'Implement portable fixture tasks' '' runtime-fixture || rc=$?
 else
-    parallel_execute "$FEATURE_TASK_CONTRACT" || rc=$?
+    parallel_execute "${FIXTURE_PASSED_CONTRACT:-$FEATURE_TASK_CONTRACT}" || rc=$?
 fi
 printf 'rc=%s\n' "$rc"
 exit "$rc"
@@ -318,6 +318,104 @@ class TaskCases(unittest.TestCase):
         with self.assertRaises(helper.Invalid):
             helper.reconcile(replaced, {"schema_version": 1, "feature_id": FID, "tasks": [self.task(1)]})
 
+    def test_first_import_reserves_later_declared_ids(self):
+        missing, another_missing = self.task(2), self.task(3)
+        missing.pop("id")
+        another_missing.pop("id")
+        for records in ([missing, self.task(1)], [missing, self.task(7), another_missing]):
+            with self.subTest(records=records):
+                contract = self.contract(*records)
+                helper.normalize(contract, FID, True)
+                self.assertEqual(len(self.wave(contract)["selected"]), len(records))
+                self.assertEqual(len({task["id"] for task in contract["tasks"]}), len(records))
+                declared = max(int(task["id"][1:]) for task in records if task.get("id"))
+                allocated = [int(task["id"][1:]) for task, record in zip(contract["tasks"], records) if not record.get("id")]
+                self.assertTrue(all(number > declared for number in allocated))
+
+    def workflow_adapter(self, *args):
+        home = Path(self.temp.name) / "workflow-home"
+        home.mkdir(exist_ok=True)
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith(("FEATURE_", "GIT_", "OCTOPUS_FEATURE", "OCTOPUS_WORKFLOW_STATE"))}
+        environment.update(HOME=str(home), OCTOPUS_PROJECT_DIR=str(self.root),
+                           CLAUDE_OCTOPUS_WORKSPACE=str(Path(self.temp.name) / "workflow-runtime"))
+        result = subprocess.run(["/bin/bash", str(PLUGIN / "scripts/helpers/feature-workflow.sh"), *args],
+                                cwd=self.root, env=environment, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")][-1]
+
+    def test_actual_adapter_replans_add_edit_reorder_delete_and_preserve_history(self):
+        context = self.workflow_adapter("prepare", "spec", "replan")
+        spec_path = Path(self.temp.name) / "spec-draft.md"
+        spec_path.write_text("# Replan fixture\n## Purpose\nTest task history.\n## Actors\n- User: requests edits.\n"
+                             "## Behaviors\n### FR-001: Edit data\nPostcondition: saved edits exist.\n"
+                             "## Constraints\nPreserve scope.\n## Dependencies\nNone.\n"
+                             "## Acceptance Definition\nGiven data\nWhen edited\nThen saved edits exist.\n")
+        self.workflow_adapter("save", "spec", str(spec_path), "claude", "unknown", "fixture-spec", context["feature"])
+        plan = Path(self.temp.name) / "accepted-plan.md"
+        manifest = self.root / context["feature"] / "feature.json"
+
+        def save(*tasks):
+            plan.write_text("# Plan\n```octopus-tasks\n" + json.dumps({"schema_version": 1,
+                            "feature_id": context["feature_id"], "tasks": list(tasks)}) + "\n```\n")
+            self.workflow_adapter("save", "plan", str(plan), "claude", "unknown", "fixture-plan", context["feature"])
+            history = json.loads(manifest.read_text())["task_history"]
+            helper.normalize(history, context["feature_id"], True)
+            return history
+
+        initial = save(self.task(1))
+        added = save(self.task(1), self.task(2))
+        self.assertEqual([task["id"] for task in added["tasks"]], ["T001", "T002"])
+        self.assertEqual(added["tasks"][0]["identity"], initial["tasks"][0]["identity"])
+        edited = save(self.task(2, title="Reword task two"), self.task(1))
+        self.assertEqual([task["id"] for task in edited["tasks"]], ["T002", "T001"])
+        self.assertEqual(edited["tasks"][0]["identity"], added["tasks"][1]["identity"])
+        retained = dict(edited["tasks"][0], files=["src/file2.py", "src/file3.py"])
+        deleted = save(retained)
+        self.assertEqual(deleted["tasks"][0]["identity"], retained["identity"])
+        self.assertEqual([task["id"] for task in deleted["tombstones"]], ["T001"])
+        self.assertEqual(deleted["high_watermark"], 2)
+        appended = save(retained, self.task(7))
+        self.assertEqual([task["id"] for task in appended["tasks"]], ["T002", "T003"])
+        self.assertEqual(appended["tombstones"], deleted["tombstones"])
+        self.assertEqual(appended["high_watermark"], 3)
+
+    def test_inactive_plan_completion_needs_no_feature_identity(self):
+        environment = {**os.environ, "PLUGIN": str(PLUGIN)}
+        result = subprocess.run(["/bin/bash"], input='''set -eu
+source "$PLUGIN/scripts/lib/feature-workflow.sh"
+FEATURE_ACTIVE=false
+unset FEATURE_ID
+feature_workflow_plan_completed unused claude fixture
+printf 'inactive-safe\\n'
+''', env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "inactive-safe\n")
+
+    def test_actual_parallel_uses_passed_contract_with_unrelated_active_contract(self):
+        inherited = self.contract(self.task(1, kind="reasoning", files=[]))
+        passed = self.contract(self.task(2, kind="reasoning", files=[]))
+        target = Path(self.temp.name) / "passed-contract.json"
+        target.write_text(json.dumps(passed))
+        result, runtime, events = self.run_dispatcher(inherited, mode="parallel", FIXTURE_PASSED_CONTRACT=str(target))
+        self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode())
+        self.assertEqual(events, [])
+        summary = json.loads(next((runtime / "features/task-runs").glob("*/summary.json")).read_text())
+        self.assertEqual([task["id"] for task in summary["completed"]], ["T002"])
+        self.assertIn('"id":"T002"', (runtime / "reasoning-prompts").read_text())
+
+    def test_actual_parallel_keeps_legacy_tasks_despite_inherited_contract(self):
+        inherited = self.contract(self.task(1, kind="reasoning", files=[]))
+        target = Path(self.temp.name) / "legacy-tasks.json"
+        target.write_text('{"tasks":[]}')
+        result, runtime, events = self.run_dispatcher(inherited, mode="parallel", FIXTURE_PASSED_CONTRACT=str(target))
+        self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode())
+        self.assertEqual(events, [])
+        self.assertFalse((runtime / "reasoning-prompts").exists())
+        report = json.loads((runtime / "workspace/state/parallel-report.json").read_text())
+        self.assertEqual(report["results"], [])
+        self.assertEqual(report["counts"]["total"], 0)
+
     def test_split_gets_new_ids_and_explicit_supersedes(self):
         old = self.contract(self.task(1))
         incoming = {"schema_version": 1, "feature_id": FID, "tasks": [self.task(2, supersedes=["T001"]), self.task(3, supersedes=["T001"])]}
@@ -347,6 +445,39 @@ class TaskCases(unittest.TestCase):
         self.assertEqual(reread["contract_digest"], parsed["contract_digest"])
         tasks.write_text("# Unsupported tasks\nDo the work.\n")
         self.assertTrue(helper.parse_tasks(tasks, FID)["legacy"])
+
+    def test_raw_parse_preserves_declarations_without_allocating_identities(self):
+        tasks = Path(self.temp.name) / "raw-tasks.md"
+        for text in ("```octopus-tasks\n" + json.dumps({"schema_version": 1, "feature_id": FID,
+                     "tasks": [self.task(1), self.task(2)]}) + "\n```\n",
+                     "- [ ] T001 [P] [FR-001] Edit `src/file1.py`\n- [ ] T002 [FR-002] Edit `src/file2.py`\n"):
+            with self.subTest(text=text):
+                tasks.write_text(text)
+                result = subprocess.run([sys.executable, str(PLUGIN / "scripts/helpers/feature-tasks.py"),
+                                         "parse", "--tasks", str(tasks), "--feature-id", FID, "--raw"],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                raw = json.loads(result.stdout)
+                self.assertTrue(all("identity" not in task for task in raw["tasks"]))
+                prior = self.contract(self.task(1))
+                reconciled = helper.reconcile(prior, raw)
+                self.assertEqual(reconciled["tasks"][0]["identity"], prior["tasks"][0]["identity"])
+                self.assertEqual([task["id"] for task in reconciled["tasks"]], ["T001", "T002"])
+
+    def test_raw_parse_keeps_explicit_identity_and_published_digest_validation(self):
+        prior = self.contract(self.task(1))
+        tasks = Path(self.temp.name) / "explicit-tasks.md"
+        claimed = self.task(2, identity=str(uuid.uuid4()))
+        tasks.write_text("```octopus-tasks\n" + json.dumps({"schema_version": 1, "feature_id": FID,
+                         "tasks": [self.task(1), claimed]}) + "\n```\n")
+        raw = helper.parse_tasks(tasks, FID, raw=True)
+        self.assertEqual(raw["tasks"][1]["identity"], claimed["identity"])
+        with self.assertRaises(helper.Invalid):
+            helper.reconcile(prior, raw)
+        forged = {**prior, "contract_digest": "sha256:" + "0" * 64}
+        tasks.write_text("```octopus-tasks\n" + json.dumps(forged) + "\n```\n")
+        with self.assertRaises(helper.Invalid):
+            helper.parse_tasks(tasks, FID, raw=True)
 
     def test_dependency_proofs_require_parent_digest_and_identity(self):
         contract = self.contract(self.task(1), self.task(2, dependencies=["T001"]))

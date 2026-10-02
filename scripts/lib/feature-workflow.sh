@@ -263,19 +263,23 @@ feature_workflow_research_completed() {
 feature_workflow_plan_completed() {
     local accepted="$1" provider="$2" run_id="$3" model="${4:-unknown}" incoming previous reconciled draft update
     [[ "${FEATURE_ACTIVE:-false}" == true ]] || return 0
+    local -a parse_args=(--tasks "$accepted" --feature-id "$FEATURE_ID")
     if [[ "$model" == unknown ]] && declare -F get_agent_model >/dev/null 2>&1; then
         model="$(get_agent_model "$provider" grasp synthesizer 2>/dev/null || printf unknown)"
     fi
     feature_contract publish --root "$FEATURE_SOURCE_ROOT" --feature "$FEATURE_SELECTED" --kind plan --input "$accepted" --provider "$provider" --model "$model" --run-id "$run_id" >/dev/null || return 0
     [[ -f "${_octo_feature_lib}/../helpers/feature-tasks.py" ]] || return 0
-    incoming="$(mktemp "${FEATURE_RUNTIME_DIR}/incoming-tasks.XXXXXX")" || return 0
-    if ! python3 "${_octo_feature_lib}/../helpers/feature-tasks.py" parse --tasks "$accepted" --feature-id "$FEATURE_ID" > "$incoming"; then
-        feature_workflow_warning 'planner task metadata unavailable; existing decomposition remains active'
-        rm -f "$incoming"
-        return 0
-    fi
     previous="$(mktemp "${FEATURE_RUNTIME_DIR}/prior-tasks.XXXXXX")" || return 0
     feature_contract_resume "$FEATURE_SOURCE_ROOT" "${FEATURE_SELECTED:-${FEATURE_SPEC_PATH:-}}" | jq '.task_history // {}' > "$previous"
+    if jq -e '.tasks != null' "$previous" >/dev/null 2>&1; then
+        parse_args+=(--raw)
+    fi
+    incoming="$(mktemp "${FEATURE_RUNTIME_DIR}/incoming-tasks.XXXXXX")" || return 0
+    if ! python3 "${_octo_feature_lib}/../helpers/feature-tasks.py" parse "${parse_args[@]}" > "$incoming"; then
+        feature_workflow_warning 'planner task metadata unavailable; existing decomposition remains active'
+        rm -f "$incoming" "$previous"
+        return 0
+    fi
     reconciled="$(mktemp "${FEATURE_RUNTIME_DIR}/reconciled-tasks.XXXXXX")" || return 0
     if jq -e '.tasks != null' "$previous" >/dev/null 2>&1; then
         if ! python3 "${_octo_feature_lib}/../helpers/feature-tasks.py" reconcile --previous "$previous" --incoming "$incoming" > "$reconciled"; then

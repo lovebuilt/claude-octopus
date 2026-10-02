@@ -176,6 +176,8 @@ def reconcile(previous, incoming):
     if type(high) is not int or high < 0 or high > 999999998:
         raise Invalid("invalid task high watermark")
     high = max([high] + [int(tid[1:]) for tid in used_ids])
+    if not old:
+        high = max([high] + [int(task["id"][1:]) for task in new["tasks"] if task.get("id")])
     retained, output, remap = set(), [], {}
     for task in new["tasks"]:
         requested_id = task.get("id")
@@ -240,7 +242,7 @@ def reconcile(previous, incoming):
                  "tombstones": tombstones, "high_watermark": high})
 
 
-def parse_tasks(path, feature_id):
+def parse_tasks(path, feature_id, raw=False):
     text = read_text(path)
     blocks, active = [], None
     for line in text.splitlines(keepends=True):
@@ -269,6 +271,8 @@ def parse_tasks(path, feature_id):
             if original.get("contract_digest") and original["contract_digest"] != sealed["contract_digest"]:
                 raise Invalid("published task contract digest does not match")
             return sealed
+        if raw:
+            return incoming
         return reconcile(None, incoming)
     tasks = []
     for match in re.finditer(r"^\s*- \[([ xX])\]\s+(T[0-9]{3,9})\s+(.+)$", text, re.M):
@@ -288,6 +292,8 @@ def parse_tasks(path, feature_id):
     if not tasks:
         return {"schema_version": 1, "feature_id": feature_id, "tasks": [], "legacy": True,
                 "diagnostics": ["No supported task metadata; retain legacy planning."]}
+    if raw:
+        return normalize({"schema_version": 1, "feature_id": feature_id, "tasks": tasks}, feature_id)
     contract = reconcile(None, {"schema_version": 1, "feature_id": feature_id, "tasks": tasks})
     contract["diagnostics"] = ["Imported Spec Kit metadata; checkbox status is not completion proof."]
     return seal(contract)
@@ -897,6 +903,7 @@ def main():
     parse = commands.add_parser("parse")
     parse.add_argument("--tasks", required=True)
     parse.add_argument("--feature-id", required=True)
+    parse.add_argument("--raw", action="store_true")
     rec = commands.add_parser("reconcile")
     rec.add_argument("--previous", required=True)
     rec.add_argument("--incoming", required=True)
@@ -919,7 +926,7 @@ def main():
         if args.command == "parse":
             if not valid_uuid(args.feature_id):
                 raise Invalid("invalid feature UUID")
-            output = parse_tasks(args.tasks, args.feature_id)
+            output = parse_tasks(args.tasks, args.feature_id, args.raw)
         elif args.command == "reconcile":
             previous = read_json(args.previous)
             output = reconcile(previous if previous else None, read_json(args.incoming))
