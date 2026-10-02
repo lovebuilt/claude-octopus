@@ -317,7 +317,7 @@ jobs:
     # The unsharded macOS matrix crossed 25 minutes in run 33899702427. Two
     # duration-weighted deterministic shards preserve full coverage and avoid
     # concentrating the slow Council/provider suites on one runner.
-    # Ubuntu remains one complete control run.
+    # Ubuntu remains one complete control run with the same bounded budget.
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: [classify-changes, smoke, portability-lint]
     if: needs.classify-changes.outputs.heavy_tests == 'true' && (github.event_name != 'pull_request' || needs.classify-changes.outputs.full_unit == 'true')
@@ -327,7 +327,7 @@ jobs:
         include:
           - os: ubuntu-latest
             label: ubuntu-latest
-            timeout_minutes: 25
+            timeout_minutes: 45
             shard_index: 0
             shard_count: 1
           - os: macos-latest
@@ -432,7 +432,9 @@ jobs:
   symlinked-path:
     name: Symlinked Path
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The full non-PR suite exceeded 15 minutes in main run 36962079934.
+    # Keep its coverage and use the same budget as the complete unit lanes.
+    timeout-minutes: 45
     needs: [classify-changes, smoke, portability-lint]
     if: needs.classify-changes.outputs.heavy_tests == 'true'
 

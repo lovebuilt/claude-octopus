@@ -92,7 +92,7 @@ case "${1:-}" in
     --version) printf '%s\n' '2.1.219' ;;
     --help)
         printf 'called\n' > "$CAPABILITY_MARKER"
-        sleep 3
+        sleep 8
         printf '%s\n' 'usage: claude --effort high'
         ;;
 esac
@@ -113,6 +113,8 @@ skip_ok=false
 
 CLAUDE_CODE_VERSION=""
 rm -f "$capability_marker"
+# This measures version initialization and feature setup as well as the 1s probe.
+# Leave CI scheduling headroom, while an unbounded 8s help call still fails.
 started_at=$(date +%s)
 bounded_detect_rc=0
 PATH="$capability_bin:$PATH" CAPABILITY_MARKER="$capability_marker" \
@@ -120,7 +122,7 @@ PATH="$capability_bin:$PATH" CAPABILITY_MARKER="$capability_marker" \
     OCTOPUS_BARE_PROBE_TIMEOUT=1 detect_claude_code_version >/dev/null 2>&1 || bounded_detect_rc=$?
 elapsed=$(( $(date +%s) - started_at ))
 if [[ "$skip_ok" == true && "$bounded_detect_rc" -eq 0 &&
-      -e "$capability_marker" && "$elapsed" -lt 3 &&
+      -e "$capability_marker" && "$elapsed" -lt 6 &&
       "$SUPPORTS_EFFORT_CLI_FLAG" == "false" ]] &&
    grep -Fq '_octo_run_bare_probe_with_timeout' "$PROJECT_ROOT/scripts/lib/providers.sh" &&
    ! grep -Eq 'grep -q -- .--effort.' "$PROJECT_ROOT/scripts/lib/providers.sh"; then

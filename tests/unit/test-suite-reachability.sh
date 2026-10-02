@@ -249,7 +249,7 @@ if [[ "$unit_timeout_setting" == '${{ matrix.timeout_minutes }}' ]] \
    && [[ "$macos_timeout_count" == "2" ]] \
    && [[ "$macos_shard_indexes" == "0,1" ]] \
    && [[ "$macos_shard_count_rows" == "2" ]] \
-   && [[ "$ubuntu_timeout_minutes" == "25" ]] \
+   && [[ "$ubuntu_timeout_minutes" == "45" ]] \
    && grep -Fq -- '--exclude=unit/test-council-command.sh' "$WORKFLOW" \
    && grep -Fq -- '--shard-index=${{ matrix.shard_index }} --shard-count=${{ matrix.shard_count }}' "$WORKFLOW" \
    && grep -Fq 'unit-focused:' "$WORKFLOW" \
