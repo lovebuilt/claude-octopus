@@ -85,6 +85,7 @@ fi
 test_case "CLI capability help probe is skippable and wall-clock bounded"
 capability_bin="$TEST_TMP_DIR/capability-bin"
 capability_marker="$TEST_TMP_DIR/capability-help-called"
+capability_budget_marker="$TEST_TMP_DIR/capability-help-budget"
 mkdir -p "$capability_bin"
 cat > "$capability_bin/claude" <<'FAKE_CLAUDE'
 #!/usr/bin/env bash
@@ -99,36 +100,56 @@ esac
 FAKE_CLAUDE
 chmod +x "$capability_bin/claude"
 source "$PROJECT_ROOT/scripts/lib/providers.sh"
+# Record help budgets across the command substitution, then run the real helper.
+capability_original_helper="$TEST_TMP_DIR/capability-original-helper.sh"
+capability_saved_helper="$TEST_TMP_DIR/capability-saved-helper.sh"
+declare -f _octo_run_bare_probe_with_timeout > "$capability_original_helper"
+sed '1s/_octo_run_bare_probe_with_timeout/_capability_original_run_bare_probe_with_timeout/' \
+    "$capability_original_helper" > "$capability_saved_helper"
+source "$capability_saved_helper"
+_octo_run_bare_probe_with_timeout() {
+    if [[ "${!#}" == "--help" ]]; then
+        printf '%s %s %s\n' "$1" "$2" "$3" >> "$CAPABILITY_BUDGET_MARKER"
+    fi
+    _capability_original_run_bare_probe_with_timeout "$@"
+}
 log() { :; }
 OCTOPUS_HOST=claude
 CLAUDE_CODE_VERSION=""
-rm -f "$capability_marker"
+rm -f "$capability_marker" "$capability_budget_marker"
 skip_detect_rc=0
 PATH="$capability_bin:$PATH" CAPABILITY_MARKER="$capability_marker" \
+    CAPABILITY_BUDGET_MARKER="$capability_budget_marker" \
     OCTOPUS_CLAUDE_BIN=claude OCTOPUS_SKIP_PROVIDER_PROBES=true \
     detect_claude_code_version >/dev/null 2>&1 || skip_detect_rc=$?
 skip_ok=false
 [[ "$skip_detect_rc" -eq 0 && ! -e "$capability_marker" &&
+   ! -e "$capability_budget_marker" &&
    "$SUPPORTS_EFFORT_CLI_FLAG" == "false" ]] && skip_ok=true
 
 CLAUDE_CODE_VERSION=""
-rm -f "$capability_marker"
+rm -f "$capability_marker" "$capability_budget_marker"
 # This measures version initialization and feature setup as well as the 1s probe.
 # Leave CI scheduling headroom, while an unbounded 8s help call still fails.
 started_at=$(date +%s)
 bounded_detect_rc=0
 PATH="$capability_bin:$PATH" CAPABILITY_MARKER="$capability_marker" \
+    CAPABILITY_BUDGET_MARKER="$capability_budget_marker" \
     OCTOPUS_CLAUDE_BIN=claude OCTOPUS_SKIP_PROVIDER_PROBES=false \
     OCTOPUS_BARE_PROBE_TIMEOUT=1 detect_claude_code_version >/dev/null 2>&1 || bounded_detect_rc=$?
 elapsed=$(( $(date +%s) - started_at ))
+bounded_budget=$(cat "$capability_budget_marker" 2>/dev/null || true)
+source "$capability_original_helper"
+unset -f _capability_original_run_bare_probe_with_timeout
 if [[ "$skip_ok" == true && "$bounded_detect_rc" -eq 0 &&
       -e "$capability_marker" && "$elapsed" -lt 6 &&
+      "$bounded_budget" == "1 1 0" &&
       "$SUPPORTS_EFFORT_CLI_FLAG" == "false" ]] &&
    grep -Fq '_octo_run_bare_probe_with_timeout' "$PROJECT_ROOT/scripts/lib/providers.sh" &&
    ! grep -Eq 'grep -q -- .--effort.' "$PROJECT_ROOT/scripts/lib/providers.sh"; then
     test_pass
 else
-    test_fail "capability help ignored probe controls (skip=$skip_ok skip_rc=$skip_detect_rc bounded_rc=$bounded_detect_rc elapsed=${elapsed}s effort=$SUPPORTS_EFFORT_CLI_FLAG)"
+    test_fail "capability help ignored probe controls (skip=$skip_ok skip_rc=$skip_detect_rc bounded_rc=$bounded_detect_rc elapsed=${elapsed}s budget=$bounded_budget effort=$SUPPORTS_EFFORT_CLI_FLAG)"
 fi
 
 # v2.1.77 flags
