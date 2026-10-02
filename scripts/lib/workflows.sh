@@ -40,6 +40,54 @@ if ! type write_agent_result_prompt >/dev/null 2>&1; then
     unset _octo_result_file_lib
 fi
 
+# Explicit file input replaces the perspective positional argument for this command.
+probe_single_cli() {
+    local perspective_file="" perspective_mode=positional perspective="" output_dir="${RESULTS_DIR:-}"
+    local agent_type task_id original_prompt=""
+    local -a args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --perspective-file)
+                if [[ -z "${2:-}" || "${2:-}" == --* || -n "$perspective_file" ]]; then
+                    printf '%s\n' 'Error: --perspective-file requires one explicit file argument' >&2
+                    return 1
+                fi
+                perspective_file="$2"
+                shift 2
+                ;;
+            --output-dir)
+                [[ -n "${2:-}" ]] || { printf '%s\n' 'Error: --output-dir requires a directory argument' >&2; return 1; }
+                output_dir="$2"
+                shift 2
+                ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    set -- "${args[@]}"
+    if [[ -n "$perspective_file" ]]; then
+        if [[ $# -lt 2 || $# -gt 3 || ! -f "$perspective_file" || ! -r "$perspective_file" || ! -s "$perspective_file" ]]; then
+            printf '%s\n' 'Error: --perspective-file requires a readable nonempty regular file, agent and task ID' >&2
+            return 1
+        fi
+        perspective="$(cat -- "$perspective_file")" || {
+            printf '%s\n' 'Error: --perspective-file could not be read' >&2
+            return 1
+        }
+        [[ -n "${perspective//[[:space:]]/}" ]] || { printf '%s\n' 'Error: --perspective-file contains no perspective text' >&2; return 1; }
+        agent_type="$1"; task_id="$2"; original_prompt="${3:-}"
+        perspective_mode="file"
+    else
+        [[ $# -ge 3 ]] || {
+            printf '%s\n' 'Usage: probe-single <agent_type> <perspective> <task_id> [original_prompt] [--output-dir <dir>]' \
+                '       probe-single <agent_type> --perspective-file <file> <task_id> [original_prompt] [--output-dir <dir>]' >&2
+            return 1
+        }
+        agent_type="$1"; perspective="$2"; task_id="$3"; original_prompt="${4:-}"
+    fi
+    RESULTS_DIR="$output_dir"
+    probe_single_agent "$agent_type" "$perspective" "$task_id" "$original_prompt" "$perspective_mode"
+}
+
 # v8.54.0: Single-agent probe for multi-agentic skill dispatch
 # Runs one probe perspective synchronously and writes result to RESULTS_DIR.
 # Called by Claude's Agent tool (one per perspective) instead of probe_discover().
@@ -55,7 +103,11 @@ probe_single_agent() {
     local original_prompt="${4:-}"
 
     log "INFO" "probe_single_agent: agent=$agent_type task=$task_id"
-    log "DEBUG" "probe_single_agent: perspective=${perspective:0:100}..."
+    if [[ "${5:-positional}" == file ]]; then
+        log "DEBUG" "probe_single_agent: file-backed perspective (${#perspective} characters)"
+    else
+        log "DEBUG" "probe_single_agent: perspective=${perspective:0:100}..."
+    fi
 
     # Pre-flight validation
     preflight_check || return 1
