@@ -13,6 +13,19 @@ Resume a previously-running Claude agent by ID. Picks up the agent's transcript 
 
 **When the user explicitly invokes `/octo:resume`, you MUST call the `agent-resume` orchestrator path below.** You are PROHIBITED from pretending to resume an agent from memory or starting unrelated fresh work without telling the user.
 
+## Repository feature recovery
+
+Before looking for a transcript or machine-local `.octo` state, inspect portable feature artifacts:
+
+```bash
+OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-${HOME}/.claude-octopus/plugin}"
+python3 "$OCTO_ROOT/scripts/helpers/feature-contract.py" resume --root "$(pwd -P)" --explicit "<feature directory or spec path, empty when omitted>"
+```
+
+An unambiguous feature recovers intent, decisions, open markers and stable completed/pending task IDs from the repository. Historical completion is context and needs fresh verification. Missing raw runtime files are expected. If several unrelated features exist, ask the user to select one; never choose by recency. Pass the selected feature to the existing `agent-resume` orchestrator path. Explicit Claude agent IDs retain transcript continuation.
+
+A feature with a spec only resumes planning. A feature with plan/tasks resumes pending implementation through the same policy, clarification, analysis and wave-validation gates. Run the returned decision batch once through the host's native question tool before the next plan/develop boundary. Keep skipped decisions open.
+
 ## Step 1: Get the Agent ID
 
 If you don't have the agent ID:

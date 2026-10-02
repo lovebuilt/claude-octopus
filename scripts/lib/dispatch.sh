@@ -26,6 +26,9 @@ fi
 # Source-safe: no main execution block.
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# shellcheck source=scripts/lib/json-contract.sh
+source "${BASH_SOURCE[0]%/*}/json-contract.sh" || return 1
+
 #                    gpt-5.2-codex, gpt-5.4-mini (budget), gpt-5 (standard), gpt-5.2, gpt-5.1
 # - OpenAI Reasoning: o3, o3-pro (API-key only), o3 (API-key only), o3-mini (API-key only)
 # - OpenAI Large Context: gpt-4.1 (1M ctx, API-key only), gpt-5.4 (1M ctx, API-key only)
@@ -670,6 +673,31 @@ get_agent_command() {
                 echo "${PLUGIN_DIR}/scripts/helpers/kimi-exec.sh"
             fi
             ;;
+        anthropic-api)
+            # This seat answers from supplied text. It cannot inspect files,
+            # browse, run tests, or implement code through tools.
+            case "$role" in
+                planner|strategist|architect|researcher|synthesizer|reviewer|code-reviewer|security-reviewer) ;;
+                *)
+                    log ERROR "anthropic-api is text-only; role '${role:-unknown}' needs a tool-capable seat"
+                    return 1
+                    ;;
+            esac
+            model="$(get_agent_model "$agent_type" "$phase" "$role")" || return 1
+            local api_effort api_thinking
+            api_effort="$(octopus_resolve_reasoning_level anthropic-api "$phase" "$role")" || return 1
+            api_effort="${api_effort:-high}"
+            api_thinking="${OCTOPUS_ANTHROPIC_API_THINKING:-auto}"
+            case "$model" in claude-sonnet-5-5|claude-opus-5-5) ;; *) log ERROR "anthropic-api requires Sonnet 5.5 or Opus 5.5"; return 1 ;; esac
+            case "$api_effort" in low|medium|high|xhigh|max) ;; *) log ERROR "anthropic-api requires low, medium, high, xhigh, or max effort"; return 1 ;; esac
+            case "$api_thinking" in auto|adaptive|between_tools) ;; *) log ERROR "Invalid anthropic-api thinking mode"; return 1 ;; esac
+            if [[ "$api_thinking" == between_tools && ( "$model" != claude-sonnet-5-5 || "$api_effort" == xhigh || "$api_effort" == max ) ]]; then
+                log ERROR "between_tools requires Sonnet 5.5 at low, medium, or high effort"
+                return 1
+            fi
+            printf '%q --model %s --effort %s --thinking %s\n' \
+                "${PLUGIN_DIR}/scripts/helpers/anthropic-api-exec.sh" "$model" "$api_effort" "$api_thinking"
+            ;;
         claude-sdk|claude-sdk-agent|claude-sdk-research)  # v9.50.0: Claude Agent SDK seat
             # Routes to helpers/claude-sdk-exec.sh when CLAUDE_SDK_API_KEY is set —
             # unlocks Opus 5 + 1M context independent of the host session. Model
@@ -792,6 +820,10 @@ get_provider_context_limit() {
             configured_limit="${OCTOPUS_CODEX_LARGE_CONTEXT_BUDGET:-${default_budget}}"
             transport_limit="${OCTOPUS_CODEX_EFFECTIVE_CONTEXT_LIMIT:-1050000}"
             ;;
+        anthropic-api)
+            configured_limit="${OCTOPUS_ANTHROPIC_API_CONTEXT_BUDGET:-${default_budget}}"
+            transport_limit="${OCTOPUS_ANTHROPIC_API_EFFECTIVE_CONTEXT_LIMIT:-1000000}"
+            ;;
         claude-sdk*)
             configured_limit="${OCTOPUS_CLAUDE_SDK_CONTEXT_BUDGET:-1000000}"
             transport_limit="${OCTOPUS_CLAUDE_SDK_EFFECTIVE_CONTEXT_LIMIT:-1000000}"
@@ -841,7 +873,9 @@ get_provider_context_limit() {
     fi
 
     local output_reserve overhead_reserve available
-    output_reserve="$(octo_normalize_nonnegative_context_value "${OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS:-1024}" "output context reserve")" || return 2
+    local default_output_reserve=1024
+    [[ "$provider" == anthropic-api ]] && default_output_reserve="${OCTOPUS_ANTHROPIC_API_MAX_TOKENS:-8192}"
+    output_reserve="$(octo_normalize_nonnegative_context_value "${OCTOPUS_CONTEXT_OUTPUT_RESERVE_TOKENS:-$default_output_reserve}" "output context reserve")" || return 2
     overhead_reserve="$(octo_normalize_nonnegative_context_value "${OCTOPUS_CONTEXT_OVERHEAD_TOKENS:-512}" "system and tool context reserve")" || return 2
     available=$((ceiling - output_reserve - overhead_reserve))
     if [[ "$available" -lt 1 ]]; then
@@ -987,39 +1021,38 @@ octo_summary_trigger_budget() {
 
 octo_json_contract_block() {
     local prompt="${1:-}"
-    printf '%s\n' "$prompt" | awk '
-        BEGIN { capture = 0; seen = 0 }
-        /^[[:space:]]*Return ONLY JSON matching / { capture = 1 }
-        capture {
-            if (seen && $0 ~ /^[[:space:]]*$/) exit
-            print
-            seen = 1
+    local begin="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    local end="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    printf '%s\n' "$prompt" | awk -v begin="$begin" -v end="$end" '
+        $0 == begin { starts++; if (starts != 1 || ends || capture) invalid = 1; capture = 1; next }
+        $0 == end { ends++; if (ends != 1 || !capture) invalid = 1; capture = 0; next }
+        capture { block = block $0 "\n" }
+        END {
+            if (invalid || capture || starts != ends) exit 2
+            if (starts == 1) printf "%s", block
         }
     '
 }
 
 octo_without_json_contract_block() {
     local prompt="${1:-}"
-    printf '%s\n' "$prompt" | awk '
-        BEGIN { removing = 0; removed = 0 }
-        !removed && /^[[:space:]]*Return ONLY JSON matching / {
-            removing = 1
-            removed = 1
-            next
+    local begin="[[OCTOPUS_TRUSTED_JSON_CONTRACT_BEGIN:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    local end="[[OCTOPUS_TRUSTED_JSON_CONTRACT_END:${OCTOPUS_JSON_CONTRACT_NONCE}]]"
+    printf '%s\n' "$prompt" | awk -v begin="$begin" -v end="$end" '
+        $0 == begin { starts++; if (starts != 1 || ends || removing) invalid = 1; removing = 1; next }
+        $0 == end { ends++; if (ends != 1 || !removing) invalid = 1; removing = 0; next }
+        removing { next }
+        { body = body $0 "\n" }
+        END {
+            if (invalid || removing || starts != ends) exit 2
+            printf "%s", body
         }
-        removing {
-            if ($0 ~ /^[[:space:]]*$/) {
-                removing = 0
-                print
-            }
-            next
-        }
-        { print }
     '
 }
 
 octo_summary_preserves_structure() {
     local original="$1" summary="$2" anchor protected_contract
+    octo_json_contract_block "$summary" >/dev/null || return 1
     for anchor in 'Task:' 'Files:' 'Creates:' 'Reads:'; do
         if [[ "$original" == *"$anchor"* && "$summary" != *"$anchor"* ]]; then
             return 1
@@ -1029,7 +1062,7 @@ octo_summary_preserves_structure() {
         return 1
     fi
 
-    protected_contract="$(octo_json_contract_block "$original")"
+    protected_contract="$(octo_json_contract_block "$original")" || return 1
     if [[ -n "$protected_contract" && "$summary" != *"$protected_contract"* ]]; then
         return 1
     fi
@@ -1041,7 +1074,7 @@ octo_fit_prompt_preserving_json_contract() {
     local protected_contract body suffix suffix_tokens contract_tokens body_budget fitted candidate candidate_tokens excess attempts=0
 
     token_budget="$(octo_normalize_context_budget "$token_budget" "protected prompt context budget")" || return 2
-    protected_contract="$(octo_json_contract_block "$original")"
+    protected_contract="$(octo_json_contract_block "$original")" || return 1
     if [[ -z "$protected_contract" ]]; then
         octo_fit_prompt_to_token_budget "$prompt" "$token_budget" "$marker"
         return $?
@@ -1052,7 +1085,7 @@ octo_fit_prompt_preserving_json_contract() {
     [[ "$prompt" == *"$protected_contract"* ]] || return 1
     contract_tokens="$(octo_estimate_prompt_tokens "$protected_contract")"
     [[ "$contract_tokens" -le "$token_budget" ]] || return 1
-    body="$(octo_without_json_contract_block "$prompt")"
+    body="$(octo_without_json_contract_block "$prompt")" || return 1
     suffix=$'\n\n'"$protected_contract"
     suffix_tokens="$(octo_estimate_prompt_tokens "$suffix")"
     if [[ "$suffix_tokens" -ge "$token_budget" ]]; then
@@ -1160,9 +1193,9 @@ summarize_then_dispatch() {
     # tail-loaded instructions/diffs because provider CLIs often fail near ARG_MAX.
     local summary_input="$prompt"
     local protected_json_contract=""
-    protected_json_contract="$(octo_json_contract_block "$prompt")"
+    protected_json_contract="$(octo_json_contract_block "$prompt")" || return 1
     if [[ -n "$protected_json_contract" ]]; then
-        summary_input="$(octo_without_json_contract_block "$summary_input")"
+        summary_input="$(octo_without_json_contract_block "$summary_input")" || return 1
     fi
     local max_summary_input="${OCTOPUS_OVERSIZE_SUMMARY_INPUT_CHARS:-120000}"
     if [[ ${#summary_input} -gt $max_summary_input ]]; then
@@ -1312,6 +1345,12 @@ enforce_context_budget() {
     local role="${2:-}"
     local agent_type="${3:-}"
     local phase="${4:-}"
+    # Authenticate the envelope before budget fitting or lossy summarization.
+    # An echoed duplicate must never replace the controller's real contract.
+    if ! octo_json_contract_block "$prompt" >/dev/null; then
+        log ERROR "Context budget: ambiguous or incomplete JSON contract envelope"
+        return 78
+    fi
     local budget provider_budget
     budget=$(get_provider_context_limit "$agent_type" "$phase" "$role")
     budget=$(octo_normalize_context_budget "$budget" "provider context budget") || return 2
@@ -1386,7 +1425,7 @@ enforce_context_budget() {
                 if [[ -n "$summarized" ]]; then
                     type record_oversize_event >/dev/null 2>&1 && record_oversize_event "$target" "$original_chars" "${#summarized}" "summarized" "$role" "$phase" "$budget" || true
                     octo_context_budget_warning "Context budget: summarized $target role=${role:-none} phase=${phase:-none} from ${original_chars} to ${#summarized} chars (budget=$budget tokens/$char_budget chars)"
-                    printf '%s\n' "$summarized"
+                    octo_strip_json_contract_markers "$summarized" || return 78
                     return 0
                 fi
                 log "DEBUG" "Context budget: truncating prompt for $target from ${#prompt} to $char_budget chars (~$budget tokens)"
@@ -1397,7 +1436,7 @@ enforce_context_budget() {
                 fi
                 type record_oversize_event >/dev/null 2>&1 && record_oversize_event "$target" "$original_chars" "${#truncated}" "truncated" "$role" "$phase" "$budget" || true
                 octo_context_budget_warning "Context budget: summarizer unavailable; truncated $target role=${role:-none} phase=${phase:-none} from ${original_chars} to ${#truncated} chars (budget=$budget tokens/$char_budget chars)"
-                printf '%s\n' "$truncated"
+                octo_strip_json_contract_markers "$truncated"
                 ;;
             truncate|*)
                 log "DEBUG" "Context budget: truncating prompt for $target from ${#prompt} to $char_budget chars (~$budget tokens)"
@@ -1408,14 +1447,14 @@ enforce_context_budget() {
                 fi
                 type record_oversize_event >/dev/null 2>&1 && record_oversize_event "$target" "$original_chars" "${#truncated}" "truncated" "$role" "$phase" "$budget" || true
                 octo_context_budget_warning "Context budget: truncated $target role=${role:-none} phase=${phase:-none} from ${original_chars} to ${#truncated} chars (budget=$budget tokens/$char_budget chars)"
-                printf '%s\n' "$truncated"
+                octo_strip_json_contract_markers "$truncated"
                 ;;
         esac
     else
         if [[ "$estimated_tokens" -gt "$budget" ]]; then
             log "DEBUG" "Context budget: admitting small oversize for ${agent_type:-unknown} role=${role:-none} phase=${phase:-none}: ${estimated_tokens} tokens vs budget ${budget} (summary trigger ${summary_trigger_budget})"
         fi
-        echo "$prompt"
+        octo_strip_json_contract_markers "$prompt"
     fi
 }
 

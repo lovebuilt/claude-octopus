@@ -165,6 +165,47 @@ class ProcessControlTests(unittest.TestCase):
              mock.patch.object(control.time, "sleep"):
             self.assertEqual(control.terminate(4242, frozen=True), "terminated")
 
+    def test_linux_missing_task_children_uses_proc_stat_fallback(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(Path, "glob", return_value=[]), \
+             mock.patch.object(control, "_linux_proc_children", return_value=[4343]) as fallback:
+            self.assertEqual(control.children(4242), [4343])
+        fallback.assert_called_once_with(4242)
+
+    def test_linux_byte_stat_preserves_stopped_and_zombie_states(self):
+        for state in [b"T", b"t", b"Z", b"X"]:
+            record = b"4242 (bad\xff) " + state + b" 20 " + b"0 " * 17 + b"12345"
+            with mock.patch.object(sys, "platform", "linux"), \
+                 mock.patch.object(Path, "read_bytes", return_value=record), \
+                 mock.patch.object(control, "_boot_id", return_value="test-boot"):
+                if state in [b"Z", b"X"]:
+                    with self.assertRaises(ProcessLookupError):
+                        control.snapshot(4242)
+                else:
+                    snapshot = control.snapshot(4242)
+                    self.assertTrue(snapshot.stopped)
+                    self.assertEqual(snapshot.ppid, 20)
+                    expected = control.hashlib.sha256(b"test-boot:4242:12345").hexdigest()
+                    self.assertEqual(snapshot.token, expected)
+
+    def test_linux_proc_scan_accepts_invalid_utf8_process_names(self):
+        entries = [mock.Mock(name="entry") for _ in range(2)]
+        entries[0].name, entries[0].path = "4343", "/proc/4343"
+        entries[1].name, entries[1].path = "4444", "/proc/4444"
+        scan = mock.MagicMock()
+        scan.__enter__.return_value = entries
+        records = [b"1 (self) R 0", b"4343 (child) S 4242", b"4444 (bad\xff) R 7"]
+        with mock.patch.object(control.os, "scandir", return_value=scan), \
+             mock.patch.object(Path, "read_bytes", side_effect=records):
+            self.assertEqual(control._linux_proc_children(4242), [4343])
+
+    def test_linux_fallback_failure_is_not_an_empty_child_list(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(Path, "glob", return_value=[]), \
+             mock.patch.object(control, "_linux_proc_children", side_effect=PermissionError("denied")):
+            with self.assertRaises(PermissionError):
+                control.children(4242)
+
     def test_linux_handle_is_closed_if_post_open_identity_changes(self):
         info = control.ProcessInfo(4242, 20, "before", 0, False)
         replacement = control.ProcessInfo(4242, 20, "after", 0, False)

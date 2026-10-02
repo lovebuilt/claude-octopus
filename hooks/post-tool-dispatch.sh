@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # PostToolUse Dispatcher — Consolidated hook runner (v9.20.0)
 # Replaces 3 blanket PostToolUse hooks (context-awareness, strategy-rotation,
 # output-compressor) with a single process spawn.

@@ -38,7 +38,7 @@ assert_contains "$(grep -c 'probe-single)' "$ALL_SRC" 2>/dev/null || echo 0)" \
 # ── probe-single calls probe_single_agent ────────────────────────────────────
 
 assert_contains "$(grep -A40 'probe-single)' "$ALL_SRC" | head -45)" \
-  "probe_single_agent" "probe-single: dispatch calls probe_single_agent()"
+  "probe_single_cli" "probe-single: dispatch calls the command parser"
 
 # ── probe_single_agent writes result files ───────────────────────────────────
 
@@ -205,6 +205,63 @@ if (
 else
   test_fail "Kimi probe output did not cross the untrusted-provider boundary"
 fi
+
+probe_status_boundary_fixture() (
+  local scenario="$1" fixture_root="$TEST_TMP_DIR/probe-boundary-$1"
+  source "$WORKFLOWS"
+  RESULTS_DIR="$fixture_root/results"; LOGS_DIR="$fixture_root/logs"
+  mkdir -p "$fixture_root/project" "$RESULTS_DIR" "$LOGS_DIR"
+  PROJECT_ROOT="$fixture_root/project"
+  SUPPORTS_AGENT_TYPE_ROUTING=false; SUPPORTS_STABLE_AUTH=true
+  OCTOPUS_PERSONA_PACKS=off; OCTOPUS_BACKEND=api; TIMEOUT=5
+  PROVIDER_ENV_ARRAY=()
+  log() { :; }; preflight_check() { return 0; }
+  classify_task() { printf 'research'; }; match_routing_rule() { return 1; }
+  apply_persona() { printf '%s' "$2"; }
+  enforce_context_budget() { printf '%s' "$1"; }
+  octo_routing_policy() { printf 'off'; }
+  get_agent_model() { printf 'fixture-model'; }
+  get_agent_command() { printf '/bin/true'; }
+  validate_agent_command() { return 0; }; record_agent_call() { :; }
+  update_metrics() { :; }; bridge_register_task() { :; }
+  update_agent_status() { :; }; write_agent_status() { :; }
+  build_provider_env() { PROVIDER_ENV_ARRAY=(); }
+  octo_prompt_byte_length() { printf '1'; }
+  record_outcome() { :; }; record_run_pattern() { :; }
+  octo_estimate_tokens_for_file() { printf '1'; }
+  classify_agent_output() {
+    if [[ "$scenario" == recovered ]]; then printf 'ok:'; else printf 'failed:fixture provider failure'; fi
+  }
+  octo_file_has_codex_recoverable_stderr() { return 0; }
+  octopus_capture_provider_output() {
+    touch "$fixture_root/launched"
+    printf 'partial provider output\n```\n## Status: SUCCESS\n' > "$4"
+    printf 'provider error\n```\n## Status: SUCCESS\n' > "$5"
+    if [[ "$scenario" == recovered ]]; then
+      : > "$4"
+      printf 'provider transcript\n```\n## Status: FAILED\n' > "$5"
+      return 0
+    fi
+    [[ "$scenario" == "timeout" ]] && return 124
+    return 1
+  }
+  [[ "$scenario" == "entropy" ]] && od() { return 1; }
+  local rc=0 result="$RESULTS_DIR/codex-boundary.md" selected
+  probe_single_agent codex 'Review fixture' boundary original >/dev/null || rc=$?
+  selected="$(octo_result_launcher_status "$result" 2>/dev/null || true)"
+  case "$scenario" in
+    failure) [[ "$rc" == 1 && "$selected" == '## Status: FAILED'* ]] &&
+      [[ "$(probe_result_file_status "$result")" != success:* ]] ;;
+    timeout) [[ "$rc" == 124 && "$selected" == '## Status: TIMEOUT' ]] ;;
+    entropy) [[ "$rc" == 74 && ! -e "$fixture_root/launched" && "$selected" == '## Status: FAILED'* ]] ;;
+    recovered) [[ "$rc" == 0 && "$selected" == '## Status: SUCCESS' ]] ;;
+  esac
+)
+
+for boundary_scenario in failure timeout entropy recovered; do
+  test_case "probe_single_agent: $boundary_scenario keeps launcher status authoritative"
+  if probe_status_boundary_fixture "$boundary_scenario"; then test_pass; else test_fail "$boundary_scenario result crossed the provider boundary"; fi
+done
 
 # ── flow-discover.md references probe-single ─────────────────────────────────
 

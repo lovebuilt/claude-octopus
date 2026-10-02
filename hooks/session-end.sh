@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — SessionEnd Hook (v8.41.0)
 # Fires when a Claude Code session ends. Finalizes metrics,
 # cleans up session artifacts, and persists key preferences

@@ -202,6 +202,7 @@ source "${SCRIPT_DIR}/lib/routing.sh" 2>/dev/null || true
 
 # Security utilities: anti-injection, secure tempfiles, output guards
 source "${SCRIPT_DIR}/lib/secure.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/lib/feature-workflow.sh" 2>/dev/null || true
 
 # Provider detection & version checking (v9.7.7 extraction)
 # Strict source (no silencing) for libs critical to core workflows — surfaces syntax errors
@@ -556,6 +557,7 @@ SUPPORTS_AGENT_SETTINGS_AGENT_FIELD=false # v9.42: Claude Code v2.1.157+ (claude
 SUPPORTS_SKILLS_AUTO_PLUGIN_LOAD=false  # v9.42: Claude Code v2.1.157+ (.claude/skills plugin autoload)
 SUPPORTS_ENTER_WORKTREE_SWITCH=false    # v9.42: Claude Code v2.1.157+ (EnterWorktree can switch Claude-managed worktrees)
 SUPPORTS_TOOL_DECISION_PARAMS_OTEL=false # v9.42: Claude Code v2.1.157+ (tool_decision tool_parameters with OTEL_LOG_TOOL_DETAILS=1)
+SUPPORTS_SONNET_5_5=false                # Claude Code v2.1.284+ (claude-sonnet-5-5)
 SUPPORTS_SONNET_5=false                  # Claude Code v2.1.197+ (claude-sonnet-5)
 SUPPORTS_OPUS_5=false                    # Claude Code v2.1.219+ (claude-opus-5 and default Opus alias)
 SUPPORTS_OPUS_5_5=false
@@ -2456,6 +2458,10 @@ if [[ "$OCTOPUS_ARTIFACT_READ_ONLY" != "true" && "$COMMAND" != "help" && "$COMMA
     fi
 fi
 
+if [[ "${DRY_RUN:-false}" != true && "${1:-}" != --help && "${1:-}" != -h ]]; then
+    feature_workflow_bind_command "$COMMAND" "${1:-feature}" || exit 1
+fi
+
 case "$COMMAND" in
     # ═══════════════════════════════════════════════════════════════════════════
     # DOUBLE DIAMOND COMMANDS (with intuitive aliases)
@@ -2479,34 +2485,7 @@ case "$COMMAND" in
         research_dispatch_command "$COMMAND" "$@"
         ;;
     probe-single)
-        # v8.54.0: Single-agent probe for multi-agentic skill dispatch
-        # Called by Claude's Agent tool (one per perspective) instead of monolithic probe
-        # v9.29.3: Parse --output-dir flag from any position (fixes #340)
-        _ps_args=()
-        while [[ $# -gt 0 ]]; do
-            case "$1" in
-                --output-dir)
-                    if [[ -n "${2:-}" ]]; then
-                        RESULTS_DIR="$2"
-                        mkdir -p "$RESULTS_DIR" 2>/dev/null || true
-                        shift 2
-                    else
-                        echo "Error: --output-dir requires a directory argument" >&2
-                        exit 1
-                    fi
-                    ;;
-                *)
-                    _ps_args+=("$1")
-                    shift
-                    ;;
-            esac
-        done
-        set -- "${_ps_args[@]}"
-        if [[ $# -lt 3 ]]; then
-            echo "Usage: $(basename "$0") probe-single <agent_type> <perspective> <task_id> [original_prompt] [--output-dir <dir>]"
-            exit 1
-        fi
-        probe_single_agent "$1" "$2" "$3" "${4:-}"
+        probe_single_cli "$@"
         ;;
     define|grasp)
         # Phase 2: Define - Consensus building
@@ -2977,6 +2956,7 @@ case "$COMMAND" in
             echo "Example: $(basename "$0") agent-resume abc123 'continue the refactor'"
             exit 0
         fi
+        feature_workflow_resume_command "$@"
         if [[ $# -lt 1 || -z "${1:-}" ]]; then
             log ERROR "agent-resume: missing agent-id"
             echo "Usage: $(basename "$0") agent-resume <agent-id> [prompt] [task-id]"

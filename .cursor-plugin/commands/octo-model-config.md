@@ -116,6 +116,8 @@ AskUserQuestion({
 
 Build options dynamically from detected providers. Only show providers that are installed/configured:
 
+For Claude, fill the resolved default from the active cost mode and installed CLI, preserving configured pins. Sonnet 5.5 requires Claude Code 2.1.284+ and Opus 5.5 requires 2.1.280+. Older clients use their supported fallback.
+
 ```
 AskUserQuestion({
   questions: [{
@@ -124,7 +126,7 @@ AskUserQuestion({
     multiSelect: false,
     options: [
       // Always show:
-      {label: "🔵 Claude", description: "Current: claude-sonnet-5 / claude-opus-5-5 (claude-opus-5 and legacy fallbacks available) — built-in, no config needed"},
+      {label: "🔵 Claude", description: "Resolved default: <resolved_claude_default>. Built-in provider."},
       // Only if codex installed:
       {label: "🔴 Codex (OpenAI)", description: "Current: <current_model> — handles implementation, reasoning"},
       // Only if agy installed:
@@ -152,15 +154,24 @@ AskUserQuestion({
     header: "Codex Model",
     multiSelect: false,
     options: [
-      {label: "gpt-5.6-sol", description: "Frontier default — 1M context, 4/20 USD per MTok input/output, best for implementation and independent review"},
-      {label: "gpt-5.6-terra", description: "Balanced — 1M context, 2/12 USD per MTok input/output, strong general-purpose Codex seat"},
-      {label: "gpt-5.6-luna", description: "Budget — 1M context, 0.20/1.20 USD per MTok input/output, best for quick checks and prototypes"},
-      {label: "o3", description: "Reasoning — 200K context, 2/8 USD per MTok input/output, deep analysis & trade-offs"},
+      {label: "gpt-6.1-sol", description: "Current Sol for complex coding, 2/10 USD per MTok input/output; requires model access in your Codex client"},
+      {label: "gpt-6-sol", description: "Previous Sol, 2/10 USD per MTok input/output; preserve an existing pin if preferred"},
+      {label: "gpt-6-luna", description: "Focused tasks and budget checks, 0.10/0.50 USD per MTok input/output"},
+      {label: "gpt-5.6-sol", description: "Current Octopus release default, 4/20 USD per MTok input/output; retained for existing configurations"},
       {label: "Custom", description: "Enter a custom model name"}
     ]
   }]
 })
 ```
+
+These GPT-6 models have a 1,050,000-token API context limit. Codex's effective
+context depends on the client and its configuration. Inputs above 272,000 tokens
+cost 2x input and 1.5x output for the whole request. The catalog also includes
+`claude-sonnet-5-5`, selected for unpinned standard Claude seats on Claude Code
+v2.1.284 and newer. Older clients retain their supported Sonnet default. Saved
+pins remain unchanged; catalogue presence does not confirm account access. Catalog
+specifications and sources are in `docs/MODEL-ROUTING-STRATEGY.md`.
+`gpt-5.6-terra`, `gpt-5.6-luna`, and `o3` remain available through Custom.
 
 `gpt-6-astra` is intentionally absent from persistent provider defaults. For a
 bounded Premium evaluation after Sol fails a hard acceptance test, configure
@@ -291,7 +302,7 @@ AskUserQuestion({
     multiSelect: true,
     options: [
       // Only show installed/configured providers
-      {label: "🔵 Claude (Sonnet 5 / Opus 5.5)", description: "Moderator — instruction-following, synthesis"},
+      {label: "🔵 Claude (Sonnet / Opus)", description: "Moderator. Resolved default: <resolved_claude_default>."},
       {label: "🔴 Codex (GPT-5.6 Sol)", description: "Independent implementation and edge-case review"},
       {label: "🧭 Antigravity (agy)", description: "Alternate model perspective via Antigravity CLI"},
       {label: "🟠 OpenRouter: GLM-5", description: "Code review specialist — quality focus"},
@@ -534,7 +545,7 @@ When invoked WITH arguments (e.g., `/octo:model-config codex gpt-5.6-sol`), skip
 
 ### Validation Gates
 
-- Provider names are validated against the canonical registry: `codex commandcode claude claude-sdk agy perplexity opencode openrouter orcarouter atlascloud openai-compatible openai-tools openai-compatible-agent cursor-agent grok qwen ollama copilot vibe kimi`. Aliases are canonicalized first; for example, `antigravity` becomes `agy`.
+- Provider names are validated against the canonical registry: `codex commandcode claude claude-sdk anthropic-api agy perplexity opencode openrouter orcarouter atlascloud openai-compatible openai-tools openai-compatible-agent cursor-agent grok qwen ollama copilot vibe kimi`. Aliases are canonicalized first; for example, `antigravity` becomes `agy`.
 - Phase names validated against known list
 - Model values reject empty strings, whitespace, shell metacharacters, and leading slashes. Provider-qualified targets such as `codex:default` are allowed.
 - In dot syntax, the suffix is stored as a capability key without separate capability-name validation.
@@ -546,3 +557,13 @@ When invoked WITH arguments (e.g., `/octo:model-config codex gpt-5.6-sol`), skip
 - Skipping validation of provider/phase names
 - Using string interpolation in jq expressions
 - Showing providers that aren't installed (in interactive mode)
+
+The `anthropic-api` provider answers from text supplied in the prompt. It has
+no file, browser, command, or coding tools. Use it for planning, research
+synthesis, or review of supplied evidence. It requires an explicit
+`ANTHROPIC_API_KEY` and Python 3. Its default is Sonnet 5.5 at high effort,
+with `between_tools` thinking. At `xhigh` or `max`, automatic thinking uses
+`adaptive`. Set `OCTOPUS_ANTHROPIC_API_THINKING=adaptive` to keep up-front
+thinking at lower effort, or `between_tools` to require the API mode. An
+incompatible explicit setting fails before a request. Claude Code and the
+Agent SDK seat currently keep adaptive thinking on Sonnet 5.5.

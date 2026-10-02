@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — PreCompact Hook (v8.41.0)
 # Fires before context compaction. Persists workflow state so progress
 # context survives automatic or manual compaction.

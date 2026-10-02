@@ -166,3 +166,15 @@ Marketplace consumers pin by release; a bare tag is not enough.
 `scripts/release.sh` waits for the main-branch Test Suite on the exact squash
 commit before it creates the tag or GitHub release. For manual recovery, watch
 that run until `completed/success`. A release is not done while main is red.
+
+### Anthropic text-seat acceptance
+
+The `anthropic-api` provider ships with the plugin and needs Python 3, with no
+additional package installation. Before changing this adapter or the Sonnet
+host selection, run `bash tests/unit/test-anthropic-api-provider.sh` and
+`bash tests/unit/test-sonnet-55-routing.sh`. The API suite executes the actual
+isolated adapter against an inert transport and checks its outgoing Messages
+payload, credential isolation, response parsing, role restrictions, and
+unsupported thinking combinations. These checks do not establish live account
+access or billable provider success. Run the normal branch and release gates
+before publishing.

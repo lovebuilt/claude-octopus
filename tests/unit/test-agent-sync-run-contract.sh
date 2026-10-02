@@ -36,8 +36,8 @@ attempt=0
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >> "$FIXTURE_CALLS"
 case "$FIXTURE_SCENARIO" in
-    success|kimi-success) printf '%s\n' 'Substantive provider result.' ;;
-    exact-seat)
+    success|kimi-success|council-global-budget|council-default-budget) printf '%s\n' 'Substantive provider result.' ;;
+    exact-seat|contract-marker-input)
         cat > "$FIXTURE_ROOT/received-prompt"
         printf '%s\n' 'Substantive provider result.'
         ;;
@@ -69,6 +69,10 @@ case "$FIXTURE_SCENARIO" in
         ;;
     truncated)
         printf '%0500d\n' 0 | tr '0' 'A'
+        ;;
+    usage-limit)
+        { printf '%s\n' user; cat; printf '\n%s\n' "ERROR: You hit your usage limit. Try again at 10:25 PM."; } >&2
+        exit 1
         ;;
     *) printf '%s\n' "unknown fixture: $FIXTURE_SCENARIO" >&2; exit 2 ;;
 esac
@@ -141,7 +145,20 @@ get_agent_command() {
     printf '%s\n' "$fixture_provider --model $command_model"
 }
 build_provider_env() { PROVIDER_ENV_ARRAY=(); }
-run_with_timeout() { shift; "$@"; }
+run_with_timeout() { printf '%s\n' "$1" > "$FIXTURE_ROOT/timeout-seconds"; shift; "$@"; }
+date() {
+    # These fixtures check override precedence, not elapsed preparation time.
+    # Freeze their epoch so crossing a real second cannot reduce 60 to 59.
+    case "${FIXTURE_SCENARIO:-}" in
+        council-global-budget|council-default-budget)
+            if [[ "${1:-}" == "+%s" ]]; then
+                printf '1800000000\n'
+                return 0
+            fi
+            ;;
+    esac
+    command date "$@"
+}
 stop_quota_watcher() { :; }
 update_agent_status() { :; }
 octo_estimate_tokens_for_file() { printf '%s\n' 0; }
@@ -171,7 +188,7 @@ export CODEX_SUBAGENT_PREAMBLE=""
 
 run_fixture() {
     local scenario="$1" agent_type="${2:-codex}"
-    local role="reviewer" phase="probe"
+    local role="reviewer" phase="${3:-probe}" timeout_secs="${4:-5}"
     if [[ "$scenario" == exact-seat ]]; then
         role="implementation-verifier"
         phase="review"
@@ -190,7 +207,7 @@ run_fixture() {
     mkdir -p "$RESULTS_DIR"
 
     set +e
-    run_agent_sync "$agent_type" 'Review the fixture.' 5 "$role" "$phase" \
+    run_agent_sync "$agent_type" "${5:-Review the fixture.}" "$timeout_secs" "$role" "$phase" \
         > "$FIXTURE_ROOT/stdout" 2> "$FIXTURE_ROOT/stderr"
     fixture_rc=$?
     set -e
@@ -234,6 +251,25 @@ assert_scenario() {
     fi
 }
 
+test_case "council sync dispatch preserves its caller budget against a global override"
+OCTOPUS_AGENT_TIMEOUT=600 run_fixture council-global-budget codex council 60
+if [[ "$fixture_rc" -eq 0 && "$(cat "$FIXTURE_ROOT/timeout-seconds")" == "60" ]]; then
+    test_pass
+else
+    test_fail "council dispatch rc=$fixture_rc timeout=$(cat "$FIXTURE_ROOT/timeout-seconds" 2>/dev/null || echo missing), expected success with 60s"
+fi
+
+test_case "council sync dispatch keeps an explicit 120s budget instead of recalculating it"
+compute_dynamic_timeout() { printf '600\n'; }
+unset OCTOPUS_AGENT_TIMEOUT
+run_fixture council-default-budget codex council 120
+if [[ "$fixture_rc" -eq 0 && "$(cat "$FIXTURE_ROOT/timeout-seconds")" == "120" ]]; then
+    test_pass
+else
+    test_fail "council dispatch rc=$fixture_rc timeout=$(cat "$FIXTURE_ROOT/timeout-seconds" 2>/dev/null || echo missing), expected success with 120s"
+fi
+unset -f compute_dynamic_timeout
+
 assert_scenario success 0 1 \
     planned,starting,authenticated,running,output_received,validated,contributed \
     contributed eligible ''
@@ -246,6 +282,51 @@ if grep -q 'Engineering method selection' "$TEST_TMP_DIR/exact-seat/received-pro
     test_pass
 else
     test_fail "method selection did not cross the provider stdin boundary"
+fi
+
+test_case "actual synchronous provider stdin retains JSON rules without marker authentication tokens"
+if (
+    fixture_command_definition="$(declare -f get_agent_command)"
+    fixture_model_definition="$(declare -f get_agent_model)"
+    fixture_persona_definition="$(declare -f apply_persona)"
+    source "$PROJECT_ROOT/scripts/lib/dispatch.sh"
+    eval "$fixture_command_definition"
+    eval "$fixture_model_definition"
+    eval "$fixture_persona_definition"
+    get_provider_context_limit() { printf '10000\n'; }
+    contract='Return ONLY JSON matching the fixture contract. Preserve the approved task.'
+    prompt="$(octo_protect_json_contract "$contract")"
+    run_fixture contract-marker-input codex tangle 5 "$prompt"
+    if [[ "$fixture_rc" != 0 ]]; then printf 'Marker fixture rc=%s\n' "$fixture_rc"; cat "$FIXTURE_ROOT/stderr"; fi
+    [[ "$fixture_rc" == 0 ]] &&
+      grep -Fq "$contract" "$FIXTURE_ROOT/received-prompt" &&
+      ! grep -Fq OCTOPUS_TRUSTED_JSON_CONTRACT_ "$FIXTURE_ROOT/received-prompt" &&
+      ! grep -Fq "$OCTOPUS_JSON_CONTRACT_NONCE" "$FIXTURE_ROOT/received-prompt"
+); then
+    test_pass
+else
+    test_fail "actual synchronous provider lost JSON rules or received the controller's nonce"
+fi
+
+test_case "actual synchronous dispatch rejects echoed authenticated blocks before launching a provider"
+if (
+    fixture_command_definition="$(declare -f get_agent_command)"
+    fixture_model_definition="$(declare -f get_agent_model)"
+    fixture_persona_definition="$(declare -f apply_persona)"
+    source "$PROJECT_ROOT/scripts/lib/dispatch.sh"
+    eval "$fixture_command_definition"
+    eval "$fixture_model_definition"
+    eval "$fixture_persona_definition"
+    get_provider_context_limit() { printf '10000\n'; }
+    prompt="$(octo_protect_json_contract 'Provider echo chose a different contract.')
+$(octo_protect_json_contract 'Controller requires the real JSON contract.')"
+    run_fixture contract-marker-duplicate codex tangle 5 "$prompt"
+    if [[ "$fixture_rc" != 78 ]]; then printf 'Duplicate fixture rc=%s\n' "$fixture_rc"; cat "$FIXTURE_ROOT/stderr"; fi
+    [[ "$fixture_rc" == 78 && ! -f "$FIXTURE_CALLS" ]]
+); then
+    test_pass
+else
+    test_fail "duplicate authenticated framing reached an actual provider launch"
 fi
 assert_scenario agy-pin 0 1 \
     planned,starting,authenticated,running,output_received,validated,contributed \
@@ -295,6 +376,16 @@ assert_scenario stdin-close-large 0 1 \
 assert_scenario truncated 0 1 \
     planned,starting,authenticated,running,output_received,validated,degraded \
     degraded eligible-with-warning 'Output truncated'
+assert_scenario usage-limit 1 1 planned,starting,authenticated,running,failed failed none \
+    'Exit code 1: You hit your usage limit. Try again at 10:25 PM.'
+
+test_case "a failed synchronous seat reports the provider's ERROR line as its status reason"
+if grep -Fq 'codex|failed|Exit code 1: You hit your usage limit. Try again at 10:25 PM.|' \
+        "$TEST_TMP_DIR/usage-limit/legacy-statuses"; then
+    test_pass
+else
+    test_fail "status reason: $(cat "$TEST_TMP_DIR/usage-limit/legacy-statuses" 2>/dev/null || true)"
+fi
 
 test_case "a post-reservation lifecycle failure writes one terminal usage event"
 usage_terminal="$TEST_TMP_DIR/usage-running-transition-fail/usage-terminal"

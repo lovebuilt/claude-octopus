@@ -17,6 +17,7 @@ codex|openai,gpt*|codex|openai|model-config,council,health,detect,dispatch,env
 commandcode|command-code*|command-code|commandcode|model-config,council,health,detect,dispatch,env,model-gateway,custom-model-auto
 claude|anthropic,sonnet*,opus*|claude|anthropic|model-config,council,health,detect,dispatch,env
 claude-sdk|claude-agent*|claude-agent|anthropic|model-config,health,detect,dispatch,env
+anthropic-api||python3|anthropic|model-config,health,detect,dispatch,env,text-only
 agy|antigravity*,gemini,gemini-*|agy|google|model-config,council,health,detect,dispatch,env,custom-model-auto
 perplexity||perplexity|perplexity|model-config,health,detect,dispatch,env
 opencode||opencode|opencode|model-config,council,detect,dispatch,env,model-gateway,custom-model-auto
@@ -50,6 +51,7 @@ codex|api-key-or-cli-session|check_provider_health|detect_providers|OCTOPUS_CODE
 commandcode|api-key-or-cli-session|check_provider_health|detect_providers|OCTOPUS_COMMANDCODE_MODEL|resolve_octopus_model|12000|variable|provider-managed|commandcode
 claude|cli-session|check_provider_health|detect_providers|OCTOPUS_CLAUDE_MODEL|resolve_octopus_model|12000|bundled|host-managed|anthropic
 claude-sdk|api-key|check_provider_health|detect_providers|OCTOPUS_CLAUDE_SDK_MODEL|resolve_octopus_model|1000000|metered|provider-managed|anthropic
+anthropic-api|api-key|check_provider_health|detect_providers|OCTOPUS_ANTHROPIC_API_MODEL|resolve_octopus_model|12000|metered|plugin-isolated|anthropic
 agy|cli-session|check_provider_health|detect_providers|OCTOPUS_AGY_MODEL|resolve_octopus_model|12000|bundled|plugin-isolated|google
 perplexity|api-key|check_provider_health|detect_providers|OCTOPUS_PERPLEXITY_MODEL|resolve_octopus_model|12000|metered|provider-managed|perplexity
 opencode|provider-config|none|detect_providers|OCTOPUS_OPENCODE_MODEL|resolve_octopus_model|12000|variable|provider-managed|opencode
@@ -282,6 +284,7 @@ octo_provider_jq_contract_json() {
 octo_provider_limitations_rows() {
     cat <<'EOF'
 claude-sdk|council|sdk-agent-runtime-is-not-a-supported-council-seat
+anthropic-api|council|text-only-api-seat-has-no-tools-or-council-runtime
 perplexity|council|research-api-runtime-is-not-a-supported-council-seat
 opencode|health|no-provider-specific-health-probe
 atlascloud|council|atlascloud-runtime-is-not-a-supported-council-seat

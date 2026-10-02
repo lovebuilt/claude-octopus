@@ -252,6 +252,89 @@ build_probe_synthesis_context() {
     rm -f "$tmp_context"
 }
 
+# One repair pass for a synthesis that failed evidence verification. The
+# verifier names the exact lines and failure kinds, so the synthesizer that
+# wrote the draft can correct its citations without re-running the providers.
+# The caller re-verifies the result, and a second failure still blocks.
+probe_synthesis_repair() {
+    local agent="$1" draft_file="$2" evidence_catalog="$3" local_evidence_root="$4"
+    [[ -n "$agent" && -n "${RESEARCH_RUN_DIR:-}" ]] || return 1
+    declare -F research_synthesis_repairable_findings >/dev/null 2>&1 || return 1
+    local findings
+    findings=$(research_synthesis_repairable_findings "$RESEARCH_RUN_DIR/verification.json")
+    [[ -n "$findings" ]] || return 1
+
+    log WARN "Probe synthesis failed evidence verification; asking '$agent' for one repair pass"
+    local numbered_draft repair_prompt repaired
+    numbered_draft=$(awk '{ printf "%d\t%s\n", NR, $0 }' "$draft_file")
+    repair_prompt="The research synthesis below failed mechanical evidence verification. Return the complete corrected document and nothing else: no preamble and no code fence around it.
+
+Fix every listed finding and keep all other content, structure and headings. Do not add new claims.
+- missing_citation: the line makes a claim without a valid citation. Add a catalog ID as [source:S001], cite a workspace-relative path with line numbers (src/app.ts:42, src/app.ts:40-48 or src/app.ts:12,40), or mark the claim [inference]. A bare :42, a basename that is not a workspace path, or a path elided after its first mention is not a citation: repeat the full path on every line that cites it.
+- unresolved_local_citation: replace the named citation with a full workspace-relative path and valid line numbers, or remove it.
+- unknown_source: the cited ID is not in the evidence catalog. Replace it with a catalog ID, a workspace citation, or [inference].
+- number_mismatch or quote_mismatch: the number or quote does not appear in the cited source or the cited lines. Re-read the file and correct the line range, correct the number or quote, or remove it. Double quotation marks are only for exact text from a cited source: write a proposed string, label or paraphrase without them, or in backticks when it is a literal value.
+- false_consensus: the line calls something consensus without two independent evidence groups. Reword it or cite a second independent source.
+
+Workspace root for file citations: ${local_evidence_root}. Every cited file and line must exist there.
+
+Verifier findings (line numbers refer to the numbered draft):
+${findings}
+
+Evidence catalog (the only valid source IDs):
+${evidence_catalog:-No external evidence catalog is available. Mark factual conclusions [inference].}
+
+Numbered draft (each line is its number, a tab, then the text; return the text without the numbers):
+${numbered_draft}"
+
+    repaired=$(run_agent_sync "$agent" "$repair_prompt" "${TIMEOUT:-300}" "synthesizer" "probe") || return 1
+    [[ -n "${repaired//[[:space:]]/}" ]] || return 1
+    local normalized
+    normalized=$(mktemp "${draft_file}.repair.XXXXXX") || return 1
+    if ! probe_synthesis_unwrap_repair "$repaired" > "$normalized" \
+       || ! grep -c '[^[:space:]]' "$normalized" >/dev/null; then
+        rm -f "$normalized"
+        return 1
+    fi
+    if ! mv "$normalized" "$draft_file"; then
+        rm -f "$normalized"
+        return 1
+    fi
+}
+
+# The verifier skips fenced blocks, so a repair returned inside one outer
+# fence would pass with nothing checked. Drop that fence and any echoed line
+# numbers before the draft is verified again.
+probe_synthesis_unwrap_repair() {
+    printf '%s\n' "$1" | awk '
+        { line = $0; sub(/^[0-9]+\t/, "", line); lines[NR] = line }
+        END {
+            first = 1; last = NR
+            while (first <= last && lines[first] ~ /^[[:space:]]*$/) first++
+            while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+            opener = lines[first]
+            sub(/^ ? ? ?/, "", opener)
+            if (first < last && match(opener, /^`+|^~+/) && RLENGTH >= 3) {
+                marker = substr(opener, 1, 1); size = RLENGTH
+                suffix = substr(opener, size + 1); closer = 0
+                if (marker != "`" || suffix !~ /`/) {
+                    for (i = first + 1; i <= last; i++) {
+                        closing = lines[i]; sub(/^ ? ? ?/, "", closing)
+                        if (substr(closing, 1, 1) != marker) continue
+                        if (match(closing, /^`+|^~+/) && RLENGTH >= size \
+                            && substr(closing, RLENGTH + 1) ~ /^[[:space:]]*$/) {
+                            closer = i
+                            break
+                        }
+                    }
+                }
+                if (closer == 0) exit 1
+                if (closer == last) { first++; last-- }
+            }
+            for (i = first; i <= last; i++) print lines[i]
+        }'
+}
+
 build_probe_fallback_synthesis() {
     local original_prompt="$1"
     local result_count="$2"
@@ -550,18 +633,23 @@ $results"
     # claude-sonnet, which would bypass OCTO_ALLOWED_PROVIDERS and send probe
     # context to a disabled provider. _aggregate_pick_synth_agent already returns
     # claude-sonnet when (and only when) the allowlist permits it (#538).
+    local synthesis_agent=""
     if [[ -n "$synth_agent" ]]; then
         synthesis=$(run_agent_sync "$synth_agent" "$synthesis_prompt" "${TIMEOUT:-300}" "synthesizer" "probe") || synthesis=""
+        [[ -n "$synthesis" ]] && synthesis_agent="$synth_agent"
         if [[ -z "$synthesis" && "$synth_agent" != "claude-sonnet" ]] \
             && { ! declare -f octo_provider_allowed >/dev/null 2>&1 || octo_provider_allowed claude-sonnet; } \
             && command -v claude >/dev/null 2>&1; then
             log WARN "Probe synthesis via '$synth_agent' failed — retrying with claude-sonnet"
             synthesis=$(run_agent_sync "claude-sonnet" "$synthesis_prompt" "${TIMEOUT:-300}" "synthesizer" "probe") || synthesis=""
+            [[ -n "$synthesis" ]] && synthesis_agent="claude-sonnet"
         fi
     fi
+    local synthesis_degraded=false
     if [[ -z "$synthesis" ]]; then
         log WARN "Synthesis failed, using compact fallback"
         synthesis=$(build_probe_fallback_synthesis "$original_prompt" "$result_count" "$usable_results" "$total_content_size")
+        synthesis_degraded=true
     fi
 
     local draft_file="$synthesis_file"
@@ -582,10 +670,16 @@ $synthesis
 EOF
 
     if declare -F research_synthesis_publish >/dev/null 2>&1; then
-        research_synthesis_publish "$draft_file" "$synthesis_file" || return 1
+        if ! research_synthesis_publish "$draft_file" "$synthesis_file"; then
+            probe_synthesis_repair "$synthesis_agent" "$draft_file" "$evidence_catalog" "$local_evidence_root" || return 1
+            research_synthesis_publish "$draft_file" "$synthesis_file" || return 1
+        fi
     fi
 
     log INFO "Synthesis complete: $synthesis_file"
+    if declare -F feature_workflow_research_completed >/dev/null 2>&1; then
+        feature_workflow_research_completed "$synthesis_file" "$synthesis_agent" "${RESEARCH_RUN_ID:-$task_group}" "$synthesis_degraded" || true
+    fi
 
     # v7.19.0 P2.3: Save to cache for reuse
     local cache_key
@@ -597,7 +691,13 @@ EOF
     local _nc="${NC:-}"
     echo ""
     echo -e "${_green}✓${_nc} Probe synthesis saved to: $synthesis_file"
-    report_probe_cache_result "$cache_key" "$synthesis_file" "$_cyan" "$_yellow" "$_nc"
+    # A compact fallback carries no findings; caching it would hand the same
+    # empty stub to every retry of this prompt until the TTL expires.
+    if [[ "$synthesis_degraded" == true ]]; then
+        echo -e "${_yellow}⚠${_nc}  Compact fallback synthesis not cached; a retry will re-run the providers"
+    else
+        report_probe_cache_result "$cache_key" "$synthesis_file" "$_cyan" "$_yellow" "$_nc"
+    fi
     echo ""
     guard_output "$(<"$synthesis_file")" "probe-synthesis"
 }

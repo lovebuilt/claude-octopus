@@ -92,19 +92,11 @@ validate_body() {
         wc -c | tr -d '[:space:]')
     [[ "$disallowed_control_count" == "0" ]] || block_body
 
-    # Recognizable provider and platform credential formats. Never print the
-    # matching line: validation output must not become a second disclosure.
-    if body_matches \
-        '(pplx-|sk-(ant-|proj-)?|sk_live_|rk_live_|gh[pousr]_|github_pat_|glpat-|xox[baprs]-|hf_|AIza)[A-Za-z0-9._-]{16,}|(AKIA|ASIA)[0-9A-Z]{16}' \
-        "$body_file"; then
-        block_body
-    fi
-
-    if body_matches \
-        "-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----|Authorization[\"']?[[:space:]]*:[[:space:]]*[\"']?(Bearer|Basic)[[:space:]]+[A-Za-z0-9._~+/-]+|[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]@/:]*:[^[:space:]@/]+@|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}" \
-        "$body_file"; then
-        block_body
-    fi
+    # Share the silent, no-write lexical scan with portable artifacts.
+    local scanner="${BASH_SOURCE[0]%/*}/helpers/artifact-safety.py"
+    command -v python3 >/dev/null 2>&1 || block_body
+    [[ -f "$scanner" ]] || block_body
+    python3 "$scanner" --recognizable-only < "$body_file" >/dev/null 2>&1 || block_body
 
     # Reject values assigned to sensitive environment names anywhere in
     # generated text while permitting explicit redaction and variable-reference

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — SessionStart Version Advisory (v9.29.0+)
 #
 # When the plugin version jumps between sessions, emit a ONE-LINE advisory

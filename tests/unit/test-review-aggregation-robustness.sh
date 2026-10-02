@@ -393,9 +393,17 @@ fi
 
 test_case "retry wait accepts only terminal status markers"
 wait_helper_body="$(sed -n '/^review_wait_for_result_status()/,/^}/p' "$REVIEW_SH")"
-terminal_helper_body="$(sed -n '/^review_result_has_terminal_status()/,/^}/p' "$REVIEW_SH")"
+terminal_markers_ok=true
+for status in SUCCESS FAILED TIMEOUT; do
+    printf '## Status: %s\n' "$status" > "$TEST_TMP_DIR/terminal-marker.md"
+    review_result_has_terminal_status "$TEST_TMP_DIR/terminal-marker.md" || terminal_markers_ok=false
+done
+for status in RUNNING SUCCESSFUL BLOCKED; do
+    printf '## Status: %s\n' "$status" > "$TEST_TMP_DIR/terminal-marker.md"
+    if review_result_has_terminal_status "$TEST_TMP_DIR/terminal-marker.md"; then terminal_markers_ok=false; fi
+done
 if grep -q 'review_result_has_terminal_status' <<< "$wait_helper_body" &&
-   grep -q "Status: (SUCCESS|FAILED|TIMEOUT)" <<< "$terminal_helper_body"; then
+   [[ "$terminal_markers_ok" == true ]]; then
     test_pass
 else
     test_fail "retry wait still accepts arbitrary status markers"

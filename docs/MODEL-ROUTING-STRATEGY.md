@@ -2,13 +2,14 @@
 
 Status: accepted and implemented
 Decision date: 2026-07-27
-Last reviewed: 2026-09-22
+Last reviewed: 2026-10-01
 
 ## Decision
 
 Claude Octopus uses Opus 5.5 (Opus 5 on Claude Code before v2.1.280) as its
 premium lead model, GPT-5.6 Sol as the independent coding/review peer, and
-Sonnet 5 as the standard Claude seat.
+Sonnet 5.5 as the standard Claude seat on Claude Code v2.1.284 and newer.
+Older clients retain Sonnet 5 or Sonnet 4.6.
 Fable 5.1 and GPT-6 Astra are cataloged but remain explicit capability
 escalations. Neither is an automatic default, premium-tier target, or generic
 fallback.
@@ -16,6 +17,81 @@ fallback.
 Fresh configurations adopt the new roster. Existing environment pins, session
 overrides, and `providers.json` settings retain precedence and are not silently
 rewritten.
+
+## Catalog refresh, 2026-09-30
+
+The catalog includes these additional models. This refresh changes available
+choices and cost estimates. The OpenAI release defaults remain in place until the separate default
+migration is delivered. The October 1 Claude update selects Sonnet 5.5 only
+on supported clients.
+
+| Model ID | API context limit | Standard USD per MTok, input/output |
+|---|---:|---:|
+| `gpt-6.1-sol` | 1,050,000 | $2 / $10 |
+| `gpt-6-sol` | 1,050,000 | $2 / $10 |
+| `gpt-6-luna` | 1,050,000 | $0.10 / $0.50 |
+| `claude-sonnet-5-5` | 1,000,000 | $2 / $10 |
+
+The three OpenAI models apply 2x input and 1.5x output prices to the whole
+request when input exceeds 272,000 tokens. At exactly 272,000, standard prices
+apply. These are API model limits, not a promise of the same effective context
+in Codex. Dispatch also applies the configured transport context ceiling.
+Use the client's model list to confirm account access before pinning a model.
+
+GPT-6.1 Sol accepts `low`, `medium`, `high`, `xhigh`, and `max` reasoning.
+It rejects `none` and `minimal`. Tool calling requires Responses. The
+Chat Completions adapter therefore allows GPT-6.1 Sol only with
+`--tool-policy none`. GPT-6 Sol and GPT-6 Luna can use that adapter's tools
+only with explicit `--reasoning-effort none`; use Codex for reasoning with
+tools. Claude Code added Sonnet 5.5 in v2.1.284. Older clients can keep
+their existing Sonnet pin.
+
+The Chat Completions adapter maps `xhigh` and `max` to `high` for compatibility
+with gateways. Codex can use the reasoning efforts supported by its model list.
+OpenRouter `:nitro` and `:floor` routing suffixes retain the base model's
+capability and standard-price estimates. Actual gateway prices can differ.
+
+Sources checked on 2026-09-30: [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol),
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna),
+[GPT-6 migration rules](https://developers.openai.com/api/docs/guides/latest-model),
+[Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview), and
+[Claude Code release history](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md).
+
+## Sonnet 5.5 API thinking, 2026-10-01
+
+The explicit `anthropic-api` text seat uses the Messages API at
+`https://api.anthropic.com/v1/messages`. Its Sonnet 5.5 default is high effort
+and `thinking: {"type": "between_tools"}`. It has no tools, so this mode
+returns text without up-front thinking. Automatic mode uses adaptive thinking
+for `xhigh` and `max`, and for Opus 5.5. An explicit `between_tools` setting
+with either effort or a different model fails before HTTP. Existing Claude
+CLI and `claude-sdk` seats keep their execution behavior and credentials.
+
+The seat requires an explicit `ANTHROPIC_API_KEY` and Python 3. It accepts
+planning, research synthesis, and review of supplied text. It rejects
+implementation, debugger, verifier, release, and unspecified roles. It cannot
+inspect a checkout, browse, execute tests, or run coding tools. Requests are
+single-turn; there is no tool loop or stored conversation to rewrite.
+
+`OCTOPUS_ANTHROPIC_API_MODEL` or `providers.json` can select Sonnet 5.5 or Opus
+5.5. Effort uses the existing role, phase, and provider reasoning precedence,
+including `OCTOPUS_ANTHROPIC_API_REASONING`. Thinking accepts `auto`,
+`adaptive`, or `between_tools` through `OCTOPUS_ANTHROPIC_API_THINKING`.
+The request has no sampling overrides, beta headers, or forced tool choice.
+Response parsing selects text blocks by type and leaves thinking blocks out
+of the answer. Refusal, truncation, empty output, and unexpected tool calls
+fail without switching models or retrying. The timeout defaults to 120 seconds
+and output allowance to 8,192 tokens, including thinking; both are bounded.
+
+Claude Code 2.1.286 does not expose `between_tools`. Its saved thinking toggle
+and `MAX_THINKING_TOKENS=0` have no effect on Sonnet 5.5. The documented Agent
+SDK thinking type also lacks `between_tools`. This API option applies only to
+`anthropic-api`; passing API JSON as a CLI flag would not enable it.
+
+Sources checked on 2026-10-01: [migration guide](https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide#turn-off-up-front-thinking),
+[Claude Code model settings](https://code.claude.com/docs/en/model-config#extended-thinking),
+and [Agent SDK thinking types](https://code.claude.com/docs/en/agent-sdk/python#thinkingconfig).
 
 ## Roster
 
@@ -26,7 +102,8 @@ rewritten.
 | GPT-5.6 Sol | implementation, terminal work, independent code review | $4 / $20 |
 | GPT-5.6 Terra | balanced Codex alternative | $2 / $12 |
 | GPT-5.6 Luna | budget Codex alternative | $0.20 / $1.20 |
-| Claude Sonnet 5 | standard Claude orchestration and synthesis | $2 / $10 |
+| Claude Sonnet 5.5 | standard Claude orchestration and synthesis on supported clients | $2 / $10 |
+| Claude Sonnet 5 | standard Claude fallback on older clients | $2 / $10 |
 | Claude Haiku 4.5 | budget Claude work | $1 / $5 |
 | Claude Fable 5.1 | opt-in judgment-class escalation, at most one automatic escalation per run | $10 / $50 |
 | GPT-6 Astra | opt-in OpenAI-family escalation after Sol fails a hard acceptance test | $10 / $50 |
@@ -149,7 +226,7 @@ capability, cost-tier, and release defaults:
 | Task class | Codex seat | Claude seat |
 |---|---|---|
 | Mechanical | GPT-5.6 Luna | Haiku 4.5 |
-| Balanced | GPT-5.6 Terra | Sonnet 5 |
+| Balanced | GPT-5.6 Terra | current supported Sonnet |
 | Premium | GPT-5.6 Sol | Opus 5.5, with Opus 5 fallback |
 | Review or security | GPT-5.6 Sol | Opus 5.5, with Opus 5 fallback |
 
@@ -169,7 +246,7 @@ Role defaults:
 - `architect`, `strategist`, `security-reviewer`, `implementer-heavy`: current
   Opus, preferring Opus 5.5 on Claude Code v2.1.280+ and Opus 5 on v2.1.219+.
 - `implementer`, `code-reviewer`: GPT-5.6 Sol.
-- `synthesizer`: current Sonnet, preferring Sonnet 5 on Claude Code v2.1.197+.
+- `synthesizer`: current Sonnet, preferring Sonnet 5.5 on Claude Code v2.1.284+ and Sonnet 5 on v2.1.197+.
 - `researcher`: Antigravity, retaining an independent research role.
 
 ## Fallbacks
@@ -215,7 +292,7 @@ The existing model-version fallbacks below are separate: they resolve a model
 within a provider family rather than selecting a different dispatch candidate.
 
 - Opus: Opus 5.5 → Opus 5 → Opus 4.8 → Opus 4.7 → Opus 4.6.
-- Sonnet: Sonnet 5 → Sonnet 4.6.
+- Sonnet: Sonnet 5.5 → Sonnet 5 → Sonnet 4.6.
 - Fable 5/5.1 refusal and security fallback: Opus 5, overridable with
   `OCTOPUS_FABLE5_FALLBACK_MODEL`.
 - Fable input gate: 524,288 bytes by default, overridable with

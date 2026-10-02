@@ -62,7 +62,7 @@ fi
 # Current-model pickers. Explicit user pins/configuration are resolved before
 # these fallbacks, and OCTOPUS_OPUS_MODEL remains the final Opus-specific pin.
 # Opus 5.5 requires Claude Code v2.1.280+; Opus 5 requires v2.1.219+;
-# Sonnet 5 requires v2.1.197+.
+# Sonnet 5.5 requires v2.1.284+; Sonnet 5 requires v2.1.197+.
 # Claude Fable 5.1 (Mythos-class, $10/$50 MTok, 1M ctx) remains opt-in only:
 # pin OCTOPUS_OPUS_MODEL=claude-fable-5-1. Never auto-selected — $10/$50 per MTok,
 # and Anthropic retains prompts/outputs up to 30 days for safety classifiers.
@@ -85,7 +85,9 @@ opus_default_model() {
 }
 
 sonnet_default_model() {
-    if [[ "${SUPPORTS_SONNET_5:-false}" == "true" ]]; then
+    if [[ "${SUPPORTS_SONNET_5_5:-false}" == "true" ]]; then
+        echo "claude-sonnet-5-5"
+    elif [[ "${SUPPORTS_SONNET_5:-false}" == "true" ]]; then
         echo "claude-sonnet-5"
     else
         echo "claude-sonnet-4.6"
@@ -238,6 +240,9 @@ validate_model_name_for_provider() {
         agy|agy-research|antigravity)
             validate_agy_model_name "$model"
             ;;
+        anthropic-api)
+            case "$model" in claude-sonnet-5-5|claude-opus-5-5) return 0 ;; *) return 1 ;; esac
+            ;;
         kimi)
             validate_kimi_model_name "$model"
             ;;
@@ -352,7 +357,7 @@ _octo_eval_model_for_class() {
         codex:balanced) printf '%s\n' "gpt-5.6-terra" ;;
         codex:premium|codex:review|codex:security) printf '%s\n' "gpt-5.6-sol" ;;
         claude:mechanical) printf '%s\n' "claude-haiku-4.5" ;;
-        claude:balanced) printf '%s\n' "claude-sonnet-5" ;;
+        claude:balanced) sonnet_default_model ;;
         claude:premium|claude:review|claude:security) opus_default_model ;;
         *) return 1 ;;
     esac
@@ -782,6 +787,7 @@ resolve_octopus_model() {
             codex*)          resolved_model="$(codex_default_model)" ;;
             gemini*|agy*|antigravity) resolved_model="default" ;;
             commandcode*)    resolved_model="deepseek/deepseek-v4-pro" ;;
+            anthropic-api*)  resolved_model="claude-sonnet-5-5" ;;
             claude-sdk*)     resolved_model="${OCTOPUS_CLAUDE_SDK_MODEL:-claude-opus-5}" ;;  # must precede claude* glob
             claude-opus-legacy*) resolved_model="claude-opus-4.6" ;;
             claude-opus*)    resolved_model="$(opus_default_model)" ;;
@@ -917,6 +923,9 @@ is_agent_available_v2() {
             ;;
         openai-compatible|openai-tools|openai-compatible-agent*)
             declare -f openai_compatible_is_available >/dev/null 2>&1 && openai_compatible_is_available
+            ;;
+        anthropic-api|anthropic-api-*)
+            command -v python3 >/dev/null 2>&1 && _octo_value_has_nonwhitespace "${ANTHROPIC_API_KEY:-}"
             ;;
         perplexity|perplexity-fast)
             [[ -n "${PERPLEXITY_API_KEY:-}" ]]

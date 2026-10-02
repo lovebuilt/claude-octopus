@@ -315,7 +315,7 @@ octopus_resolve_reasoning_policy() {
 }
 
 octopus_provider_supports_reasoning() {
-  case "$1" in codex|claude|claude-sdk|openai-compatible-agent|openai-compatible|openai-tools) return 0 ;; *) return 1 ;; esac
+  case "$1" in codex|claude|claude-sdk|anthropic-api|openai-compatible-agent|openai-compatible|openai-tools) return 0 ;; *) return 1 ;; esac
 }
 
 octopus_reasoning_cli_fragment() {
@@ -327,7 +327,7 @@ octopus_reasoning_cli_fragment() {
   fi
   case "$provider" in
     codex) printf "%s\n" "-c model_reasoning_effort=\"${level}\"" ;;
-    claude|claude-sdk) printf "%s\n" "--effort ${level}" ;;
+    claude|claude-sdk|anthropic-api) printf "%s\n" "--effort ${level}" ;;
     openai-compatible-agent|openai-compatible|openai-tools)
       # The OpenAI reasoning_effort domain is low|medium|high; xhigh/max are
       # Claude-side levels and would fail command validation downstream.

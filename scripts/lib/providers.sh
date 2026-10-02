@@ -35,6 +35,7 @@ if ! declare -f copilot_is_available >/dev/null 2>&1; then
 fi
 
 : "${SUPPORTS_OPUS_5_5:=false}"
+: "${SUPPORTS_SONNET_5_5:=false}"
 
 # Keep the Claude Code --bare authentication check from wedging every Octopus
 # command when the CLI is waiting on auth, Keychain, or a broken hook. The
@@ -564,6 +565,10 @@ detect_claude_code_version() {
         SUPPORTS_OPUS_5_5=true
     fi
 
+    if version_compare "$CLAUDE_CODE_VERSION" "2.1.284" ">="; then
+        SUPPORTS_SONNET_5_5=true
+    fi
+
     log "INFO" "Claude Code v$CLAUDE_CODE_VERSION detected"
     log "INFO" "Task Management: $SUPPORTS_TASK_MANAGEMENT | Fork Context: $SUPPORTS_FORK_CONTEXT | Agent Teams: $SUPPORTS_AGENT_TEAMS"
     log "INFO" "Persistent Memory: $SUPPORTS_PERSISTENT_MEMORY | Hook Events: $SUPPORTS_HOOK_EVENTS | Agent Type Routing: $SUPPORTS_AGENT_TYPE_ROUTING"
@@ -611,7 +616,7 @@ detect_claude_code_version() {
     log "INFO" "Bash Session ID Env: $SUPPORTS_BASH_SESSION_ID_ENV"
     log "INFO" "Opus 4.8: $SUPPORTS_OPUS_4_8 | Dynamic Workflows: $SUPPORTS_DYNAMIC_WORKFLOWS | Lean Prompt Default: $SUPPORTS_LEAN_SYSTEM_PROMPT_DEFAULT"
     log "INFO" "Agent Settings Agent Field: $SUPPORTS_AGENT_SETTINGS_AGENT_FIELD | Skills Auto Plugin Load: $SUPPORTS_SKILLS_AUTO_PLUGIN_LOAD | EnterWorktree Switch: $SUPPORTS_ENTER_WORKTREE_SWITCH | Tool Decision Params OTel: $SUPPORTS_TOOL_DECISION_PARAMS_OTEL"
-    log "INFO" "Sonnet 5: $SUPPORTS_SONNET_5 | Opus 5: $SUPPORTS_OPUS_5 | Opus 5.5: $SUPPORTS_OPUS_5_5"
+    log "INFO" "Sonnet 5: $SUPPORTS_SONNET_5 | Sonnet 5.5: $SUPPORTS_SONNET_5_5 | Opus 5: $SUPPORTS_OPUS_5 | Opus 5.5: $SUPPORTS_OPUS_5_5"
 
     # v8.29.0: Context window control
     OCTOPUS_CONTEXT_WINDOW="${OCTOPUS_CONTEXT_WINDOW:-auto}"
@@ -939,6 +944,12 @@ check_provider_health() {
                 :
             else
                 echo "qwen: not authenticated (set QWEN_API_KEY or configure Coding-Plan)" >&2
+                return 1
+            fi
+            ;;
+        anthropic-api)
+            if ! command -v python3 >/dev/null 2>&1 || ! _octo_value_has_nonwhitespace "${ANTHROPIC_API_KEY:-}"; then
+                echo "anthropic-api: Python 3 and an explicit ANTHROPIC_API_KEY are required" >&2
                 return 1
             fi
             ;;
@@ -1361,6 +1372,11 @@ detect_providers() {
     # Detect Moonshot Kimi Code CLI
     if { ! declare -f octo_provider_allowed >/dev/null 2>&1 || octo_provider_allowed kimi; } && command -v kimi &>/dev/null; then
         result="${result}kimi:$(kimi_auth_method) "
+    fi
+
+    if { ! declare -f octo_provider_allowed >/dev/null 2>&1 || octo_provider_allowed anthropic-api; } &&
+       command -v python3 >/dev/null 2>&1 && _octo_value_has_nonwhitespace "${ANTHROPIC_API_KEY:-}"; then
+        result="${result}anthropic-api:api-key "
     fi
 
     # Detect Claude Agent SDK seat (CLAUDE_SDK_API_KEY unlocks Opus 5 + 1M context)

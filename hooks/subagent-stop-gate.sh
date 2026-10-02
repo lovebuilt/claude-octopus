@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # SubagentStop Gate — Quality scoring, provider attribution, cost logging, and
 # council verdict pre-screening before a subagent's summary reaches the lead.
 #

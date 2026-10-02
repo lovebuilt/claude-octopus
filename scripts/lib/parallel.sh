@@ -11,6 +11,7 @@
 #
 # Extracted from orchestrate.sh (v9.7.8)
 # Source-safe: no main execution block.
+source "${BASH_SOURCE[0]%/*}/feature-scheduler.sh"
 
 # _fan_out_agents_from_config (v9.31.0): read .routing.features.parallel from
 # providers.json. /octo:model-config wizard writes this array under "Parallel
@@ -272,6 +273,14 @@ _parallel_write_report() {
 
 parallel_execute() {
     local tasks_file="${1:-$TASKS_FILE}"
+    if [[ "${OCTOPUS_FEATURE_PARALLEL_WAVE_ACTIVE:-false}" != true ]]; then
+        if [[ -n "${FEATURE_TASK_CONTRACT:-}" && "$tasks_file" == "$FEATURE_TASK_CONTRACT" ]] || \
+           { [[ -f "$tasks_file" ]] && jq -e '.schema_version == 1 and (.feature_id|type == "string")' "$tasks_file" >/dev/null 2>&1; }; then
+            local FEATURE_TASK_CONTRACT="$tasks_file"
+            feature_tasks_parallel_execute "$tasks_file"
+            return $?
+        fi
+    fi
     local _parallel_lib_dir
     _parallel_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if ! declare -f review_kill_process_tree_frozen >/dev/null 2>&1; then
@@ -642,8 +651,15 @@ parallel_execute() {
             spawn_pid_handoff=$(mktemp "${TMPDIR:-/tmp}/octo-parallel-pid.XXXXXX") || spawn_status=1
         fi
         if [[ "$spawn_status" -eq 0 ]]; then
+            local feature_role="" feature_phase=""
+            local parallel_spawn_args=("$agent" "$prompt" "$task_id")
+            if [[ "${OCTOPUS_FEATURE_PARALLEL_WAVE_ACTIVE:-false}" == true ]]; then
+                feature_role=$(jq -r '.role // "implementer"' <<< "$task") || feature_role=implementer
+                feature_phase=tangle
+                parallel_spawn_args+=("$feature_role" "$feature_phase")
+            fi
             if OCTOPUS_SPAWN_PID_HANDOFF_FD=9 \
-                spawn_agent_capture_pid "$agent" "$prompt" "$task_id" \
+                spawn_agent_capture_pid "${parallel_spawn_args[@]}" \
                     9>"$spawn_pid_handoff" > "$spawn_output"; then
                 pid=$(awk '/^[0-9]+$/ { value=$1 } END { print value }' "$spawn_output" 2>/dev/null)
                 [[ "$pid" =~ ^[1-9][0-9]*$ ]] || spawn_status=1

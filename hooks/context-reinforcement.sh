@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Context Reinforcement Hook — SessionStart
 # Re-injects Iron Laws after context compaction so enforcement rules survive
 # conversation compression. Inspired by obra/superpowers v4.3.1 SessionStart pattern.

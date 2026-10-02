@@ -37,6 +37,7 @@ test_case "council seats keep their own budget under an explicit --timeout"
 # council_seat_timeout also keys the seat reaper; overriding it here would turn
 # clean 124 timeouts into watchdog kills and beat per-provider council config.
 if ! OCTOPUS_TIMEOUT_EXPLICIT=1 OCTOPUS_TIMEOUT_EXPLICIT_SECS=900 octopus_sync_timeout_override 120 council >/dev/null && \
+   ! OCTOPUS_AGENT_TIMEOUT=600 octopus_sync_timeout_override 60 council >/dev/null && \
    [[ "$(OCTOPUS_TIMEOUT_EXPLICIT=1 OCTOPUS_TIMEOUT_EXPLICIT_SECS=900 octopus_sync_timeout_override 300 grasp)" == "900" ]]; then
     test_pass
 else

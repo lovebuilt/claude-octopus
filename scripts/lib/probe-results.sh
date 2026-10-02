@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+
 
 # An empty directory is a normal recovery case, not a failed pipeline. Bash
 # handles spaces/newlines in filenames and requires no ls/head subprocesses.
@@ -23,6 +25,14 @@ fi
 probe_result_output_chars() {
     local file="$1"
     [[ -f "$file" ]] || { echo 0; return 0; }
+
+    local output frame_rc=0
+    output=$(octo_result_framed_sections "$file" output) || frame_rc=$?
+    if [[ "$frame_rc" -eq 0 ]]; then
+        LC_ALL=C printf '%s' "$output" | wc -c | tr -d '[:space:]'
+        return 0
+    fi
+    [[ "$frame_rc" -eq 2 ]] || { echo 0; return 0; }
 
     awk '
         BEGIN { in_output = 0; chars = 0 }
@@ -53,24 +63,32 @@ probe_result_file_status() {
         fi
     fi
 
-    local output_chars
+    local output_chars status_line frame_rc=0
+    status_line=$(octo_result_launcher_status "$file" 2>/dev/null || true)
+    if [[ -z "$status_line" ]]; then
+        octo_result_framed_sections "$file" status >/dev/null 2>&1 || frame_rc=$?
+        if [[ "$frame_rc" -ne 2 ]]; then
+            echo "failed:incomplete-framed-result"
+            return 0
+        fi
+    fi
     output_chars="$(probe_result_output_chars "$file")"
     output_chars="${output_chars:-0}"
     [[ "$output_chars" =~ ^[0-9]+$ ]] || output_chars=0
 
-    if grep -q "Status: SUCCESS" "$file" 2>/dev/null; then
+    if [[ "$status_line" == "## Status: SUCCESS"* ]]; then
         if [[ "$output_chars" -gt 0 ]]; then
             echo "success:"
         else
             echo "failed:empty-output"
         fi
-    elif grep -q "Status: TIMEOUT" "$file" 2>/dev/null; then
+    elif [[ "$status_line" == "## Status: TIMEOUT"* ]]; then
         if [[ "$output_chars" -gt 0 ]]; then
             echo "timeout:partial-output"
         else
             echo "failed:timeout-empty"
         fi
-    elif grep -q "Status: FAILED" "$file" 2>/dev/null; then
+    elif [[ "$status_line" == "## Status: FAILED"* ]]; then
         if [[ "$output_chars" -gt 0 ]]; then
             echo "degraded:failed-with-output"
         else

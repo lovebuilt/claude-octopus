@@ -126,27 +126,40 @@ else
     test_fail "wrapped recovery output was not parsed: [$recovered]"
 fi
 
-test_case "debate exclusions are read from a wrapped debate result"
-debate_start="$(grep -nF 'debate_result=$(echo "$debate_result"' "$REVIEW_SH" | head -n 1 | cut -d: -f1)"
-debate_end="$(grep -nF 'exclude_ids=$(echo "$debate_result"' "$REVIEW_SH" | head -n 1 | cut -d: -f1)"
-if [[ -z "$debate_start" || -z "$debate_end" ]]; then
-    test_fail "could not locate the debate result parsing lines in review.sh"
+debate_candidate='{"file":"src/app.ts","line":8,"severity":"normal","category":"correctness","title":"Contested","detail":"Guarded by the caller","confidence":0.6,"verdict":"needs-debate","debate_id":"finding-1"}'
+debate_candidates="$(jq -cn --argjson finding "$debate_candidate" '[$finding]')"
+
+test_case "wrapped evidence-backed debate decisions exclude the identified finding"
+debate_document='{"decisions":[{"debate_id":"finding-1","decision":"exclude","reason":"Caller guards empty input","evidence":"src/app.ts:8 if (!input) return"}]}'
+wrapped_debate="$(OCTOPUS_SECURITY_V870=true wrap_cli_output codex "$debate_document")"
+unwrapped_debate="$(printf '%s\n' "$wrapped_debate" | review_strip_external_cli_wrapper)"
+debate_decisions="$(printf '%s\n%s\n' "$debate_candidates" "$unwrapped_debate" | review_resolve_debate_decisions)"
+if [[ "$unwrapped_debate" == "$debate_document" ]] &&
+   printf '%s' "$debate_decisions" | jq -e --argjson finding "$debate_candidate" '
+       length == 1 and .[0].decision == "exclude" and
+       .[0].debate_id == "finding-1" and .[0].finding == $finding and
+       .[0].reason == "Caller guards empty input" and
+       .[0].evidence == "src/app.ts:8 if (!input) return"
+   ' >/dev/null; then
+    test_pass
 else
-    {
-        printf '%s\n' 'review_test_debate_exclusions() {'
-        printf '%s\n' '    local debate_result="$1"'
-        sed -n "${debate_start},${debate_end}p" "$REVIEW_SH"
-        printf '%s\n' '    printf "%s\n" "$exclude_ids"'
-        printf '%s\n' '}'
-    } > "$TEST_TMP_DIR/debate-parse.sh"
-    source "$TEST_TMP_DIR/debate-parse.sh"
-    wrapped_debate="$(OCTOPUS_SECURITY_V870=true wrap_cli_output codex '{"include":["finding-0"],"exclude":["finding-1"]}')"
-    debate_exclusions="$(review_test_debate_exclusions "$wrapped_debate" 2>/dev/null || true)"
-    if [[ "$debate_exclusions" == '["finding-1"]' ]]; then
-        test_pass
-    else
-        test_fail "wrapped debate result produced exclusions [$debate_exclusions]"
-    fi
+    test_fail "wrapped evidence-backed exclusion was lost: [$debate_decisions]"
+fi
+
+test_case "wrapped unsupported bare debate exclusions retain the original finding"
+bare_debate_document='{"include":[],"exclude":["finding-1"]}'
+wrapped_bare_debate="$(OCTOPUS_SECURITY_V870=true wrap_cli_output codex "$bare_debate_document")"
+unwrapped_bare_debate="$(printf '%s\n' "$wrapped_bare_debate" | review_strip_external_cli_wrapper)"
+bare_debate_decisions="$(printf '%s\n%s\n' "$debate_candidates" "$unwrapped_bare_debate" | review_resolve_debate_decisions)"
+if [[ "$unwrapped_bare_debate" == "$bare_debate_document" ]] &&
+   printf '%s' "$bare_debate_decisions" | jq -e --argjson finding "$debate_candidate" '
+       length == 1 and .[0].decision == "retain" and
+       .[0].debate_id == "finding-1" and .[0].finding == $finding and
+       (.[0].reason | length > 0)
+   ' >/dev/null; then
+    test_pass
+else
+    test_fail "unsupported bare exclusion removed or changed its candidate: [$bare_debate_decisions]"
 fi
 
 REVIEW_HARNESS="$TEST_TMP_DIR/review-run-harness.sh"

@@ -596,10 +596,40 @@ local_bad_status=0
 research_verify_synthesis "$local_bad_draft" || local_bad_status=$?
 local_bad_kinds=$(jq -r '.checks[] | "\(.line):\(.kind)"' "$RESEARCH_RUN_DIR/verification.json" | tr '\n' ' ')
 if [[ "$local_bad_status" -ne 0 ]] \
-   && [[ "$local_bad_kinds" == "1:number_mismatch 2:missing_citation 3:missing_citation 4:missing_citation 5:missing_citation 6:missing_citation 7:missing_citation " ]]; then
+   && [[ "$local_bad_kinds" == "1:number_mismatch 2:unresolved_local_citation 3:unresolved_local_citation 4:unresolved_local_citation 5:unresolved_local_citation 6:unresolved_local_citation 7:unresolved_local_citation " ]]; then
     test_pass
 else
     test_fail "unresolvable workspace citations were accepted: $local_bad_kinds"
+fi
+
+test_case "emphasized ordered-list markers are not checked as cited numbers"
+marker_draft="$RESEARCH_RUN_DIR/local-markers.md"
+{
+    printf '%s\n' '**4. Unexpected errors return 500** (`src/handler.ts:4`).'
+    printf '%s\n' '__2. Unexpected errors return 500__ (`src/handler.ts:4`).'
+    printf '%s\n' '- **3.** Unexpected errors return 500 (`src/handler.ts:4`).'
+    printf '%s\n' '- Unexpected errors return **503** (`src/handler.ts:4`).'
+} > "$marker_draft"
+marker_status=0
+research_verify_synthesis "$marker_draft" || marker_status=$?
+marker_kinds=$(jq -r '.checks[] | "\(.line):\(.kind):\(.detail)"' "$RESEARCH_RUN_DIR/verification.json" | tr '\n' ' ')
+if [[ "$marker_status" -ne 0 && "$marker_kinds" == "4:number_mismatch:503 " ]]; then
+    test_pass
+else
+    test_fail "emphasized list markers were checked as numbers, or an emphasized value escaped: $marker_kinds"
+fi
+
+test_case "an emphasized decimal remains a complete numeric claim"
+printf 'Availability is 5%%.\n' > "$local_root/src/availability.txt"
+printf '%s\n' '**503.5%** availability (`src/availability.txt:1`).' > "$marker_draft"
+marker_status=0
+research_verify_synthesis "$marker_draft" || marker_status=$?
+if [[ "$marker_status" -ne 0 ]] \
+   && jq -e '.checks | any(.kind == "number_mismatch" and .detail == "503.5%")' \
+       "$RESEARCH_RUN_DIR/verification.json" >/dev/null; then
+    test_pass
+else
+    test_fail "an emphasized decimal escaped evidence verification"
 fi
 
 test_case "workspace citations to files over the size cap fail closed"
@@ -614,7 +644,7 @@ cap_draft="$RESEARCH_RUN_DIR/local-cap.md"
 cap_status=0
 OCTOPUS_RESEARCH_MAX_RESPONSE_BYTES=256 research_verify_synthesis "$cap_draft" || cap_status=$?
 cap_kinds=$(jq -r '.checks[] | "\(.line):\(.kind)"' "$RESEARCH_RUN_DIR/verification.json" | tr '\n' ' ')
-if [[ "$cap_status" -ne 0 ]] && [[ "$cap_kinds" == "1:missing_citation " ]]; then
+if [[ "$cap_status" -ne 0 ]] && [[ "$cap_kinds" == "1:unresolved_local_citation " ]]; then
     test_pass
 else
     test_fail "size cap not enforced: status=$cap_status checks=[$cap_kinds]"
@@ -705,6 +735,70 @@ if [[ "$normalization_status" -ne 0 && "$normalization_kind" == "local_cache_err
     test_pass
 else
     test_fail "normalization failure left cache files: status=$normalization_status checks=[$normalization_kind]"
+fi
+
+test_case "digits inside identifiers and git SHAs are not extracted as numbers"
+identifier_numbers=""
+while IFS= read -r identifier_line; do
+    identifier_numbers="${identifier_numbers}$(research_extract_numbers "$identifier_line")"
+done <<'EOF'
+| **T-1 (ALR-R1, R2; DoD-1)** | | | |
+- **The groundwork is on `main` at `89a941fda`.** That covers:
+  - p50/p95 latency pages;
+- Both `a6538e52e` pins contain `d34478150`; PLAT-1181, #1728 and DoD-2 track them.
+- abc123-456-789 is an identifier.
+- ALR-R4(c) and §4.2-4.3 cover the k8s c3po_fleet monitors in us-east-1 on claude-opus-5-5 (v11.9.6).
+EOF
+claim_numbers=$(research_extract_numbers \
+    '1. Pages fire after 15m or 30s on 5xx, 5 s apart, on 10-13 routes, 20m-45m and 7s-9s windows, 42% and 3.5 per 1,024 at 2026-09-28 across 1234567 rows.' \
+    | LC_ALL=C sort | tr '\n' ' ')
+if [[ -z "$identifier_numbers" \
+      && "$claim_numbers" == "09 1,024 10 1234567 13 15 20 2026 28 3.5 30 42% 45 5 7 9 " ]]; then
+    test_pass
+else
+    test_fail "identifiers leaked [$identifier_numbers] or claims were lost [$claim_numbers]"
+fi
+
+test_case "identifier-only lines need no citation while numbers beside identifiers still do"
+identifier_draft="$RESEARCH_RUN_DIR/local-identifiers.md"
+{
+    printf '%s\n' '| **T-1 (ALR-R1, R2; DoD-1)** | | | |'
+    printf '%s\n' '- **The groundwork is on `main` at `89a941fda`.** That covers:'
+    printf '%s\n' '  - p50/p95 latency pages;'
+    printf '%s\n' '- PLAT-1181 tracks #1728 and DoD-2.'
+    printf '%s\n' '- Commit `d34478150` makes unexpected errors return 500 (`src/handler.ts:4`).'
+    printf '%s\n' '- T-5 pages after 15m on 5xx.'
+    printf '%s\n' '- DoD-3 leaves 16 routes without a probe.'
+    printf '%s\n' '- Commit `0e03ef56a` makes unexpected errors return 503 (`src/handler.ts:4`).'
+    printf '%s\n' '- Unexpected errors return 500 after a 500ms-900ms backoff (`src/handler.ts:4`).'
+} > "$identifier_draft"
+identifier_status=0
+research_verify_synthesis "$identifier_draft" || identifier_status=$?
+identifier_kinds=$(jq -r '.checks[] | "\(.line):\(.kind):\(.detail)"' "$RESEARCH_RUN_DIR/verification.json" \
+    | sed -E 's/^([0-9]+:missing_citation):.*/\1/' | tr '\n' ' ')
+if [[ "$identifier_status" -ne 0 \
+      && "$identifier_kinds" == "6:missing_citation 7:missing_citation 8:number_mismatch:503 9:number_mismatch:900 " ]]; then
+    test_pass
+else
+    test_fail "identifier digits were checked as claims, or real numbers escaped: $identifier_kinds"
+fi
+
+test_case "an unresolved workspace citation is reported by name and its line numbers are not claims"
+unresolved_draft="$RESEARCH_RUN_DIR/local-unresolved.md"
+{
+    printf '%s\n' '- Unexpected errors return 500 (`src/handler.ts:4`; `main.tf:144-155`).'
+    printf '%s\n' '- Unexpected errors return 503 (`handler.ts:4`).'
+    printf '%s\n' '- A 4.5:1 contrast ratio is served from https://example.com:8443 [inference].'
+    printf '%s\n' '- The job API at https://example.com:443/api/jobs:42 answers slowly [inference].'
+} > "$unresolved_draft"
+unresolved_status=0
+research_verify_synthesis "$unresolved_draft" || unresolved_status=$?
+unresolved_kinds=$(jq -r '.checks[] | "\(.line):\(.kind):\(.detail)"' "$RESEARCH_RUN_DIR/verification.json" | tr '\n' ' ')
+if [[ "$unresolved_status" -ne 0 \
+      && "$unresolved_kinds" == "1:unresolved_local_citation:main.tf:144-155 2:unresolved_local_citation:handler.ts:4 " ]]; then
+    test_pass
+else
+    test_fail "unresolved citations were misreported: $unresolved_kinds"
 fi
 
 test_summary

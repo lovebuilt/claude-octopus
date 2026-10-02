@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — UserPromptSubmit Hook (v9.11.0)
 # Explicit /octo:* commands always get alias/title handling. Plain-language
 # classification and routing are opt-in.

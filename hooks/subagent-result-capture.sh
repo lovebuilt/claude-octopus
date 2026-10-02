@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # SubagentStop Hook — Capture last_assistant_message into agent result files
 # Bridges Claude Code's native SubagentStop event with Octopus result files.
 # When a Claude subagent finishes, this hook extracts last_assistant_message

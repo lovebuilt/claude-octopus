@@ -82,6 +82,24 @@ test_discover_ignores_no_manifest() {
     fi
 }
 
+test_auto_discovery_ignores_project_packs() {
+    test_case "automatic discovery does not trust project-local packs"
+
+    local project_dir="$TEST_TMP_DIR/untrusted-project"
+    mkdir -p "$project_dir/.octopus/personas/evil"
+    printf 'name: evil\n' > "$project_dir/.octopus/personas/evil/pack.yaml"
+
+    local result
+    result=$(PROJECT_ROOT="$project_dir" HOME="$TEST_TMP_DIR/empty-home" \
+        OCTOPUS_PERSONA_PACKS=auto discover_persona_packs 2>/dev/null)
+
+    if [[ -z "$result" ]]; then
+        test_pass
+    else
+        test_fail "Auto mode must not discover project-controlled packs, got: $result"
+    fi
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pack Loading
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -316,6 +334,101 @@ test_persona_override_no_override() {
     fi
 }
 
+test_persona_override_rejects_path_escape() {
+    test_case "get_persona_override rejects traversal outside the pack"
+
+    local pack_dir="$TEST_TMP_DIR/traversal-pack"
+    local secret="$TEST_TMP_DIR/secret.txt"
+    mkdir -p "$pack_dir" "$WORKSPACE_DIR/.octo"
+    printf 'do not disclose\n' > "$secret"
+    cat > "$pack_dir/pack.yaml" << 'EOF'
+name: traversal-pack
+personas:
+  - file: ../secret.txt
+    replaces: debugger
+EOF
+    printf '{"pack":{"dir":"%s","persona_count":1}}\n' "$pack_dir" > "$WORKSPACE_DIR/.octo/active-packs.json"
+
+    local result
+    result=$(OCTOPUS_PERSONA_PACKS="$pack_dir" get_persona_override debugger 2>/dev/null)
+    if [[ -z "$result" ]]; then
+        test_pass
+    else
+        test_fail "Traversal path must be rejected, got: $result"
+    fi
+}
+
+test_persona_override_rejects_symlink() {
+    test_case "get_persona_override rejects symlinked persona files"
+
+    local pack_dir="$TEST_TMP_DIR/symlink-pack"
+    local secret="$TEST_TMP_DIR/symlink-secret.txt"
+    mkdir -p "$pack_dir" "$WORKSPACE_DIR/.octo"
+    printf 'do not disclose\n' > "$secret"
+    ln -s "$secret" "$pack_dir/persona.md"
+    cat > "$pack_dir/pack.yaml" << 'EOF'
+name: symlink-pack
+personas:
+  - file: persona.md
+    replaces: debugger
+EOF
+    printf '{"pack":{"dir":"%s","persona_count":1}}\n' "$pack_dir" > "$WORKSPACE_DIR/.octo/active-packs.json"
+
+    local result
+    result=$(OCTOPUS_PERSONA_PACKS="$pack_dir" get_persona_override debugger 2>/dev/null)
+    if [[ -z "$result" ]]; then
+        test_pass
+    else
+        test_fail "Symlinked persona must be rejected, got: $result"
+    fi
+}
+
+test_persona_override_accepts_explicit_pack() {
+    test_case "explicit discovery and apply preserve pack approval"
+    local root="$TEST_TMP_DIR/explicit-root" pack_dir="$TEST_TMP_DIR/explicit-root/pack"
+    mkdir -p "$pack_dir"
+    printf 'You are a debugger.\n' > "$pack_dir/persona.md"
+    pack_dir=$(cd -P "$pack_dir" && pwd)
+    printf 'name: explicit\npersonas:\n  - file: persona.md\n    replaces: debugger\n' > "$pack_dir/pack.yaml"
+    local discovered result
+    discovered=$(OCTOPUS_PERSONA_PACKS=auto discover_persona_packs "$root")
+    OCTOPUS_PERSONA_PACKS=auto apply_persona_pack "$discovered" >/dev/null
+    result=$(OCTOPUS_PERSONA_PACKS=auto get_persona_override debugger)
+    if [[ "$result" == "$pack_dir/persona.md" ]]; then test_pass
+    else test_fail "explicit pack approval was lost: $result"; fi
+
+    test_case "approved regular persona is returned through environment root"
+    _PERSONA_EXPLICIT_PACKS=()
+    result=$(OCTOPUS_PERSONA_PACKS="$root" get_persona_override debugger)
+    if [[ "$result" == "$pack_dir/persona.md" ]]; then test_pass
+    else test_fail "approved regular persona rejected: $result"; fi
+}
+
+test_persona_override_ignores_stale_project_registration() {
+    test_case "get_persona_override ignores unapproved project registry entries"
+
+    local project_dir="$TEST_TMP_DIR/stale-project"
+    local pack_dir="$project_dir/.octopus/personas/stale"
+    mkdir -p "$pack_dir" "$WORKSPACE_DIR/.octo"
+    printf 'malicious instructions\n' > "$pack_dir/persona.md"
+    cat > "$pack_dir/pack.yaml" << 'EOF'
+name: stale
+personas:
+  - file: persona.md
+    replaces: debugger
+EOF
+    printf '{"pack":{"dir":"%s","persona_count":1}}\n' "$pack_dir" > "$WORKSPACE_DIR/.octo/active-packs.json"
+
+    local result
+    result=$(PROJECT_ROOT="$project_dir" OCTOPUS_PERSONA_PACKS=auto \
+        get_persona_override debugger 2>/dev/null)
+    if [[ -z "$result" ]]; then
+        test_pass
+    else
+        test_fail "An old unapproved project registration must stay inactive, got: $result"
+    fi
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # lib/personas.sh Module Structure
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -348,6 +461,7 @@ test_personas_sourced_by_orchestrate() {
 test_discover_empty
 test_discover_finds_pack_yaml
 test_discover_ignores_no_manifest
+test_auto_discovery_ignores_project_packs
 
 # Loading
 test_load_pack_metadata
@@ -366,6 +480,10 @@ test_auto_load_disabled
 
 # Overrides
 test_persona_override_no_override
+test_persona_override_accepts_explicit_pack
+test_persona_override_rejects_path_escape
+test_persona_override_rejects_symlink
+test_persona_override_ignores_stale_project_registration
 
 # Module structure
 test_personas_lib_exists

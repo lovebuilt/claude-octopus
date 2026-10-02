@@ -38,6 +38,28 @@ The report uses the same static readiness contract as setup and Doctor. It
 does not send prompts or make provider requests. A provider can be installed
 but `degraded` when authentication is missing or cannot be confirmed safely.
 
+## Council prerequisites
+
+Council requires `python3` on `PATH` for atomic run-status updates and
+same-key supersession. The helper uses the standard-library `fcntl` lock on
+macOS and Linux; no Python packages are required. Install Python 3 before
+running Council. A missing interpreter stops the run before provider dispatch
+or run-directory creation and reports the prerequisite.
+
+## Check dispatched Claude seats
+
+Workflow preflight can run a provider smoke test. It sends a trivial prompt
+through the same `claude --print` command used by Claude seats, with the selected
+binary and model. This checks the subprocess login separately from the host
+session. `OCTOPUS_CLAUDE_SMOKE_TIMEOUT` sets the wait, with a default of 60 seconds.
+An authentication error fails preflight with login guidance. A timeout reports
+degraded readiness and lets the workflow continue, including for a Claude-only
+fleet. Excluding Claude with `OCTO_ALLOWED_PROVIDERS` skips its smoke check.
+
+The smoke cache includes whether Claude is checked, its binary, and its model.
+Changing any of these requires a new check. Static Doctor and capability reports
+remain local-only; they do not run this prompt.
+
 ## Check cached installations
 
 ```bash
@@ -135,3 +157,71 @@ The diagnostic commands use these exit codes:
 
 JSON output remains valid when a check exits with code `1`, so automation can
 read the evidence before deciding what to do.
+
+## Windows host acceptance
+
+Octopus workflows run on Linux and macOS. Windows users can run the Claude Code
+CLI inside WSL, with a separate Linux plugin installation, or use Claude Code
+Desktop over SSH to a Linux or macOS host. The desktop app's built-in WSL sessions
+[do not load plugins](https://code.claude.com/docs/en/desktop-wsl).
+
+On native Git Bash, MSYS2, and Cygwin, every registered Claude Code hook exits
+before reading input or writing state. The SessionStart root helper creates no
+stable-root copy. Codex uses the existing native Windows no-op hook commands.
+Run `bash tests/unit/test-native-windows-hook-inert.sh` and
+`bash tests/unit/test-windows-doctor-compat.sh` to check simulated Windows hosts,
+WSL identification, and the documented entry points. Actual Windows desktop
+installation requires a Windows host; simulation does not establish host discovery.
+
+## Portable feature workflow
+
+`/octo:spec` creates `specs/NNN-slug/` with `spec.md`, `research.md`,
+`plan.md`, `tasks.md`, `decisions.md` and `feature.json`. The manifest keeps
+relative artifact paths, provider attribution, task identities and open user
+decisions. Existing Spec Kit directories are reused. Raw transcripts and policy
+snapshots stay in runtime state.
+
+`OCTOPUS_FEATURE` selects a feature directory or spec filename. With multiple
+features, select one before planning, development or resume. An explicit spec
+filename is honored. `OCTOPUS_FEATURE_LAYOUT=legacy` keeps new specs at the
+repository root; the default `auto` retains existing root specs and uses feature
+directories for new ones. Both layouts remain supported through the next minor
+release. Non-Git or unwritable repositories receive a warning and use the legacy
+path when it is writable.
+
+Policy discovery checks `.specify/memory/constitution.md`, then the path in
+`OCTOPUS_PROJECT_POLICY`, then `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md` and
+`.github/CONTRIBUTING.md`. The first readable, bounded source wins. Missing
+policy warns and proceeds. Octopus does not create a constitution. A verified
+conflict must quote the policy and the proposed action against their current
+source digests before implementation is blocked.
+
+Skipped user questions remain in the spec. The host asks at most three in a
+batch before the next affected phase. Task-specific decisions defer affected
+tasks while independent tasks may proceed. Models cannot resolve user decisions
+by supplying their own answers.
+
+`/octo:resume specs/NNN-slug` reads repository artifacts on a fresh clone.
+Historical completion is evidence to check, not execution permission. Completed
+coding scopes must match the current committed files and pass fresh repository
+verification before they unlock dependent tasks. Unverified work remains pending.
+
+The delivery checks for these paths exercise first and repeated activation,
+legacy and Spec Kit compatibility, concurrent allocation, secret withholding,
+policy conflicts, skipped questions, stable task identities, both dispatchers,
+fresh-home resume and the packaged command/skill references. They use disposable
+repositories and inert providers. They do not install into an active host cache.
+
+Run the focused acceptance checks with:
+
+```bash
+bash tests/unit/test-feature-delivery.sh
+bash tests/unit/test-feature-workflow.sh
+bash tests/unit/test-feature-tasks.sh
+bash tests/unit/test-feature-analysis-runtime.sh
+make sync-check
+make validate-plugin-assembly
+```
+
+Run `make ci-changed` before pushing and `make ci-local` before merging.
+The hosted branch checks must pass against the PR's current commit.

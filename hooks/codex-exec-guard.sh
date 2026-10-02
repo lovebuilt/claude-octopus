@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Provider CLI guard — blocks unsafe direct non-interactive provider dispatch.
 # PreToolUse hook on Bash. Returns block decision with correction message.
 # WHY: `codex "prompt"` launches interactive TUI which fails in non-TTY (Claude Code Bash tool).
@@ -395,11 +399,25 @@ _octo_segment_provider() {
             return 0
             ;;
         codex)
+            # Subcommands that run to completion without a TTY. Bare prompts,
+            # the interactive entry points (resume, fork, app, cloud, agents),
+            # the long-running servers and anything unknown stay blocked.
             case "$first_arg" in
-                exec|--version|--help|-h|login|auth|completion)
+                exec|e|review|--version|-V|--help|-h|help|login|logout|auth|completion|\
+                mcp|plugin|doctor|features|apply|a|sandbox|debug|archive|unarchive|\
+                queue|migrate-rollouts)
                     return 1
                     ;;
             esac
+            # `--help`/`-h` anywhere before `--` prints help and exits. After
+            # `--`, Codex reads it as the prompt and opens the TUI.
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --) break ;;
+                    --help|-h) return 1 ;;
+                esac
+                shift
+            done
             printf '%s\n' "$provider"
             return 0
             ;;

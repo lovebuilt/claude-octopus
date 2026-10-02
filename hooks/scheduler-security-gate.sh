@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus Scheduler - Security Gate Hook (v8.15.0)
 # PreToolUse hook active when OCTOPUS_JOB_ID is set.
 # Blocks tools not in the job's allowed list and restricts filesystem access.

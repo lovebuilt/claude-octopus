@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — Elicitation Hook (v9.19.0)
 # Fires when an MCP server requests structured user input (Elicitation event)
 # or when the user responds (ElicitationResult event).

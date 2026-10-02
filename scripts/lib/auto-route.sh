@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+
 _agent_spec_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_agent_spec_lib_dir}/agent-spec.sh" 2>/dev/null || true
 # lib/auto-route.sh — Auto-routing and routing rule matching
@@ -590,7 +592,9 @@ Output a structured report with findings and recommendations." ;;
                     echo -e "      ${RED}✗${NC} ${domain} audit timed out"
                 elif [[ -f "$agent_result_file" ]]; then
                     cp "$agent_result_file" "$domain_file"
-                    if grep -q '^## Status: FAILED' "$agent_result_file" 2>/dev/null; then
+                    local domain_status
+                    domain_status=$(octo_result_launcher_status "$agent_result_file" 2>/dev/null || true)
+                    if [[ "$domain_status" == "## Status: FAILED"* ]]; then
                         ((failed++)) || true
                         echo -e "      ${RED}✗${NC} ${domain} audit failed"
                     else

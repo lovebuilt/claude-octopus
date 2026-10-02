@@ -1,4 +1,8 @@
 #!/bin/bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # task-completion-checkpoint.sh
 # Creates checkpoint when tasks complete for session resumption
 # Part of Claude Code v2.1.12+ integration

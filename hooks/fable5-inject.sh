@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # fable5-inject.sh — Inject Fable 5 dispatch guidance on SessionStart when a
 # Fable 5 or 5.1 environment pin is detected,
 # or when OCTOPUS_FABLE5_MODE=on forces it. OCTOPUS_FABLE5_MODE=off suppresses.

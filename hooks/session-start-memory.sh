@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — SessionStart Auto-Memory Loader (v8.41.0)
 # Fires on SessionStart. Reads persisted preferences from auto-memory
 # (written by session-end.sh) and pre-loads them into the session,

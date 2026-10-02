@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/feature-scheduler.sh"
+
 # Double Diamond workflow phases
 # Extracted from orchestrate.sh to reduce file size
 # Functions: probe_single_agent, probe_discover, grasp_define, tangle_develop, ink_deliver
+
+# shellcheck source=scripts/lib/json-contract.sh
+source "${BASH_SOURCE[0]%/*}/json-contract.sh" || return 1
 
 if ! type probe_result_file_status >/dev/null 2>&1; then
     _octo_probe_results_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/probe-results.sh"
@@ -34,6 +40,54 @@ if ! type write_agent_result_prompt >/dev/null 2>&1; then
     unset _octo_result_file_lib
 fi
 
+# Explicit file input replaces the perspective positional argument for this command.
+probe_single_cli() {
+    local perspective_file="" perspective_mode=positional perspective="" output_dir="${RESULTS_DIR:-}"
+    local agent_type task_id original_prompt=""
+    local -a args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --perspective-file)
+                if [[ -z "${2:-}" || "${2:-}" == --* || -n "$perspective_file" ]]; then
+                    printf '%s\n' 'Error: --perspective-file requires one explicit file argument' >&2
+                    return 1
+                fi
+                perspective_file="$2"
+                shift 2
+                ;;
+            --output-dir)
+                [[ -n "${2:-}" ]] || { printf '%s\n' 'Error: --output-dir requires a directory argument' >&2; return 1; }
+                output_dir="$2"
+                shift 2
+                ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    set -- "${args[@]}"
+    if [[ -n "$perspective_file" ]]; then
+        if [[ $# -lt 2 || $# -gt 3 || ! -f "$perspective_file" || ! -r "$perspective_file" || ! -s "$perspective_file" ]]; then
+            printf '%s\n' 'Error: --perspective-file requires a readable nonempty regular file, agent and task ID' >&2
+            return 1
+        fi
+        perspective="$(cat -- "$perspective_file")" || {
+            printf '%s\n' 'Error: --perspective-file could not be read' >&2
+            return 1
+        }
+        [[ -n "${perspective//[[:space:]]/}" ]] || { printf '%s\n' 'Error: --perspective-file contains no perspective text' >&2; return 1; }
+        agent_type="$1"; task_id="$2"; original_prompt="${3:-}"
+        perspective_mode="file"
+    else
+        [[ $# -ge 3 ]] || {
+            printf '%s\n' 'Usage: probe-single <agent_type> <perspective> <task_id> [original_prompt] [--output-dir <dir>]' \
+                '       probe-single <agent_type> --perspective-file <file> <task_id> [original_prompt] [--output-dir <dir>]' >&2
+            return 1
+        }
+        agent_type="$1"; perspective="$2"; task_id="$3"; original_prompt="${4:-}"
+    fi
+    RESULTS_DIR="$output_dir"
+    probe_single_agent "$agent_type" "$perspective" "$task_id" "$original_prompt" "$perspective_mode"
+}
+
 # v8.54.0: Single-agent probe for multi-agentic skill dispatch
 # Runs one probe perspective synchronously and writes result to RESULTS_DIR.
 # Called by Claude's Agent tool (one per perspective) instead of probe_discover().
@@ -49,7 +103,11 @@ probe_single_agent() {
     local original_prompt="${4:-}"
 
     log "INFO" "probe_single_agent: agent=$agent_type task=$task_id"
-    log "DEBUG" "probe_single_agent: perspective=${perspective:0:100}..."
+    if [[ "${5:-positional}" == file ]]; then
+        log "DEBUG" "probe_single_agent: file-backed perspective (${#perspective} characters)"
+    else
+        log "DEBUG" "probe_single_agent: perspective=${perspective:0:100}..."
+    fi
 
     # Pre-flight validation
     preflight_check || return 1
@@ -99,19 +157,15 @@ probe_single_agent() {
     enhanced_prompt=$(apply_persona "$role" "$perspective" "false" "${curated_name_early:-}")
 
     # v8.21.0: Persona pack override
-    if type get_persona_override &>/dev/null 2>&1 && [[ "${OCTOPUS_PERSONA_PACKS:-auto}" != "off" ]]; then
-        local persona_override_file
-        persona_override_file=$(get_persona_override "${curated_name_early:-$agent_type}" 2>/dev/null)
-        if [[ -n "$persona_override_file" && -f "$persona_override_file" ]]; then
-            local pack_persona
-            pack_persona=$(cat "$persona_override_file" 2>/dev/null)
-            if [[ -n "$pack_persona" ]]; then
-                enhanced_prompt="${pack_persona}
+    if type get_persona_override_content &>/dev/null 2>&1 && [[ "${OCTOPUS_PERSONA_PACKS:-auto}" != "off" ]]; then
+        local pack_persona
+        pack_persona=$(get_persona_override_content "${curated_name_early:-$agent_type}" 2>/dev/null)
+        if [[ -n "$pack_persona" ]]; then
+            enhanced_prompt="${pack_persona}
 
 ---
 
 ${enhanced_prompt}"
-            fi
         fi
     fi
 
@@ -225,6 +279,17 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
     fi
     echo "# Started: $(date)" >> "$result_file"
     echo "" >> "$result_file"
+    local _probe_nonce _probe_nonce_pattern='^[0-9a-f]{32}$'
+    _probe_nonce=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || _probe_nonce=""
+    if [[ ! "$_probe_nonce" =~ $_probe_nonce_pattern ]]; then
+        printf '## Output\n```\n(no provider launched)\n```\n## Status: FAILED (Unable to generate result nonce)\n' >> "$result_file"
+        update_agent_status "$agent_type" "failed" 0 "$estimated_cost" "$TIMEOUT" "$task_id" "$phase" "$result_file"
+        type write_agent_status >/dev/null 2>&1 && write_agent_status \
+            "$agent_type" "failed" "$tokens_in" 0 "Unable to generate result nonce" \
+            0 "$result_file" "$role" || true
+        return 74
+    fi
+    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
     echo "## Output" >> "$result_file"
     echo '```' >> "$result_file"
 
@@ -331,11 +396,14 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
             && octo_file_has_codex_recoverable_stderr "$temp_errors"; then
             echo "(Codex response was emitted on stderr; see Errors transcript below.)" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
             echo "" >> "$result_file"
             echo "## Errors" >> "$result_file"
+            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
             echo '```' >> "$result_file"
             cat "$temp_errors" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
             echo "" >> "$result_file"
             codex_stderr_transcript_appended=true
         fi
@@ -359,6 +427,7 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
 
         if [[ "$codex_stderr_transcript_appended" != "true" ]]; then
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
             echo "" >> "$result_file"
         fi
         # Legacy result consumers look for literal "Status: FAILED" and "Status: TIMEOUT" markers.
@@ -368,9 +437,11 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
                 if [[ -s "$temp_errors" ]]; then
                     echo "" >> "$result_file"
                     echo "## Errors" >> "$result_file"
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
                     echo '```' >> "$result_file"
                     cat "$temp_errors" >> "$result_file"
                     echo '```' >> "$result_file"
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
                 fi
                 update_agent_status "$agent_type" "failed" "$elapsed_ms" "$estimated_cost" "$TIMEOUT" "$task_id" "$phase" "$result_file"
                 record_outcome "$agent_type" "$agent_type" "research" "$phase" "fail" "$elapsed_ms" 2>/dev/null || true
@@ -412,6 +483,7 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
             fi
         fi
         echo '```' >> "$result_file"
+        echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
         echo "" >> "$result_file"
         echo "## Status: TIMEOUT" >> "$result_file"
         log "WARN" "Agent $agent_type timed out for task $task_id"
@@ -428,14 +500,17 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
             cat "$temp_output" >> "$result_file"
         fi
         echo '```' >> "$result_file"
+        echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_probe_nonce} -->" >> "$result_file"
         echo "" >> "$result_file"
         echo "## Status: FAILED (exit code: $exit_code)" >> "$result_file"
         if [[ -s "$temp_errors" ]]; then
             echo "" >> "$result_file"
             echo "## Errors" >> "$result_file"
+            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
             echo '```' >> "$result_file"
             cat "$temp_errors" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_probe_nonce} -->" >> "$result_file"
         fi
         log "WARN" "Agent $agent_type failed for task $task_id (exit=$exit_code)"
         local end_time_ms elapsed_ms tokens_out
@@ -443,7 +518,10 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
         elapsed_ms=$((end_time_ms - start_time_ms))
         tokens_out=$(octo_estimate_tokens_for_file "$temp_output" 2>/dev/null || echo 0)
         update_agent_status "$agent_type" "failed" "$elapsed_ms" "$estimated_cost" "$TIMEOUT" "$task_id" "$phase" "$result_file"
-        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$tokens_out" "Exit code $exit_code" "$elapsed_ms" "$result_file" "$role" || true
+        local failure_reason="Exit code $exit_code"
+        declare -F octo_failure_reason >/dev/null 2>&1 && \
+            failure_reason=$(octo_failure_reason "$exit_code" "$enhanced_prompt" "$temp_errors" "$temp_output")
+        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$tokens_out" "$failure_reason" "$elapsed_ms" "$result_file" "$role" || true
         final_rc=$exit_code
     fi
 
@@ -1052,6 +1130,9 @@ ${_blind_spot_checklist}"
                 echo -e " ${YELLOW}⚠${NC} $agent_display probe $i: partial result (${reason:-degraded}; $(numfmt --to=iec-i --suffix=B $file_size 2>/dev/null || echo "${file_size}B"))"
                 ((timeout_count++)) || true
             else
+                if [[ "$reason" == "contract-ineligible" ]] && declare -F run_contract_output_file_reason >/dev/null 2>&1; then
+                    reason="$(run_contract_output_file_reason "$result_file")" || reason="contract-ineligible"
+                fi
                 echo -e " ${RED}✗${NC} $agent_display probe $i: unusable (${reason:-failed}; $(numfmt --to=iec-i --suffix=B $file_size 2>/dev/null || echo "${file_size}B"))"
                 ((failure_count++)) || true
             fi
@@ -1175,6 +1256,11 @@ grasp_define() {
         return 0
     fi
 
+    if declare -F feature_workflow_refresh_clarifications >/dev/null 2>&1; then
+        feature_workflow_refresh_clarifications || true
+        feature_workflow_gate plan || true
+    fi
+
     # Cost transparency (v7.18.0 - P0.0)
     if ! display_workflow_cost_estimate "Grasp (Define Phase)" 1 2 1200; then
         log "WARN" "Workflow cancelled by user after cost review"
@@ -1292,6 +1378,9 @@ $consensus
 EOF
 
     log INFO "Consensus document: $consensus_file"
+    if [[ -n "$consensus_source" ]] && declare -F feature_workflow_plan_completed >/dev/null 2>&1; then
+        feature_workflow_plan_completed "$consensus_file" "$consensus_source" "$task_group" || true
+    fi
     echo ""
     echo -e "${GREEN}✓${NC} Problem definition saved to: $consensus_file"
     echo ""
@@ -1528,6 +1617,36 @@ tangle_scopes_overlap() {
     fi
 
     return 1
+}
+
+tangle_scope_authorizes_path() {
+    local scope="${1%/}" path="$2" baseline_head="${3:-}" before_file="${4:-}"
+    local repo_root baseline_type before_rc
+    [[ -n "$scope" && -n "$path" ]] || return 1
+    [[ "$scope" == "$path" ]] && return 0
+    # Collision checks may fold case and compare in both directions. Write
+    # authority keeps exact spelling and only descends into declared directories.
+    [[ "$path" == "$scope"/* ]] || return 1
+    if [[ -n "$before_file" ]]; then
+        [[ -f "$before_file" ]] || return 1
+        # Snapshot entries are files, symlinks and gitlinks, never directories.
+        if grep -Fxc -- "$scope" "$before_file" >/dev/null 2>&1; then
+            return 1
+        else
+            before_rc=$?
+            [[ "$before_rc" -eq 1 ]] || return 1
+        fi
+    fi
+    repo_root=$(tangle_resolve_repo_root 2>/dev/null) || return 1
+    [[ -n "$baseline_head" ]] || baseline_head=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) || return 1
+    baseline_type=$(git -C "$repo_root" cat-file -t "$baseline_head:$scope" 2>/dev/null || true)
+    case "$baseline_type" in
+        tree) return 0 ;;
+        blob|commit) return 1 ;;
+    esac
+    # A new directory must be declared as such before workers run. Retain the
+    # legacy extensionless directory convention without consulting their edits.
+    [[ "$1" == */ || "${scope##*/}" != *.* ]]
 }
 
 tangle_resolve_repo_root() {
@@ -1963,7 +2082,7 @@ tangle_decomposition_wire_output_usable() {
 }
 
 
-tangle_decomposition_json_contract_guidance() {
+tangle_decomposition_json_contract_text() {
     cat <<'EOF'
 Return ONLY JSON matching Tangle decomposition schema v1. No Markdown fences, headings, or prose.
 Shape:
@@ -1980,6 +2099,10 @@ Rules:
 - reads is read-only context and never grants write permission.
 - include at least one coding subtask and preserve the original deliverable.
 EOF
+}
+
+tangle_decomposition_json_contract_guidance() {
+    octo_protect_json_contract "$(tangle_decomposition_json_contract_text)"
 }
 
 tangle_decomposition_json_payload() {
@@ -2283,7 +2406,7 @@ ${previous_output}"
 }
 
 tangle_adequacy_json_contract_guidance() {
-    cat <<'EOF'
+    octo_protect_json_contract "$(cat <<'EOF'
 Return ONLY JSON matching Tangle adequacy schema v1:
 {"schema_version":1,"verdict":"pass|fail","reasons":["..."],"scope_review":[{"action":"move_to_reads|remove_write|add_write","path":"repo/relative/path","reason":"..."}]}
 Rules:
@@ -2292,6 +2415,7 @@ Rules:
 - path is one concrete repository-relative path; no globs or prose.
 - do not emit Markdown, prose before/after JSON, or legacy VERDICT:/REASONS:/SCOPE_REVIEW: text.
 EOF
+)"
 }
 
 tangle_adequacy_json_output_usable() {
@@ -2365,7 +2489,7 @@ ${subtasks}"
 }
 
 tangle_reconsideration_json_contract_guidance() {
-    cat <<'EOF'
+    octo_protect_json_contract "$(cat <<'EOF'
 Return ONLY JSON matching Tangle reconsideration schema v1:
 {"schema_version":1,"decisions":[{"action":"move_to_reads|remove_write|add_write","path":"repo/relative/path","decision":"accept|reject","reason":"..."}],"decomposition":{"schema_version":1,"subtasks":[{"id":1,"kind":"coding","title":"Short title","reads":[],"files":["relative/file.js"],"creates":[],"task":"Specific coding work"}]}}
 Rules:
@@ -2373,11 +2497,12 @@ Rules:
 - action/path must exactly match the adequacy recommendation; reason is non-empty planner rationale.
 - decomposition must satisfy Tangle decomposition JSON schema v1. Every subtask object has exactly the keys id, kind, title, reads, files, creates and task, even when the current decomposition is shown as text:
 EOF
-    tangle_decomposition_json_contract_guidance | sed -n '/^Rules:$/,$p' | sed '1d; s/^- /  - /'
+    tangle_decomposition_json_contract_text | sed -n '/^Rules:$/,$p' | sed '1d; s/^- /  - /'
     cat <<'EOF'
 - preserve the original deliverable and keep coding scopes disjoint.
 - do not emit Markdown, prose before/after JSON, DECISIONS:/DECOMPOSITION: text, or globs.
 EOF
+)"
 }
 
 tangle_reconsideration_expected_scope_review_json() {
@@ -2411,9 +2536,15 @@ tangle_reconsideration_legacy_response_valid() {
 }
 
 tangle_reconsideration_response_valid() {
-    local response="$1"
+    local response="$1" decisions subtasks decomposition
     if tangle_reconsideration_json_output_usable "$response"; then
-        printf '%s\n' "$response" | python3 "${BASH_SOURCE[0]%/*}/../tangle-reconsideration-json.py" validate-coverage >/dev/null
+        printf '%s\n' "$response" | python3 "${BASH_SOURCE[0]%/*}/../tangle-reconsideration-json.py" validate-coverage >/dev/null || return 1
+        decisions=$(printf '%s\n' "$response" | python3 "${BASH_SOURCE[0]%/*}/../tangle-reconsideration-json.py" decisions) || return 1
+        decomposition=$(printf '%s\n' "$response" | python3 "${BASH_SOURCE[0]%/*}/../tangle-reconsideration-json.py" decomposition) || return 1
+        subtasks=$(tangle_render_json_decomposition_output "$decomposition") || return 1
+        [[ -n "$subtasks" ]] || return 1
+        [[ $(tangle_parseable_subtask_count "$subtasks") -gt 0 ]] || return 1
+        [[ $(tangle_parseable_coding_subtask_count "$subtasks") -gt 0 ]]
         return $?
     fi
     tangle_reconsideration_legacy_response_valid "$response"
@@ -4098,6 +4229,10 @@ tangle_handle_verification_signal() {
 
 tangle_verify() {
     local prompt="$1"
+    if declare -F feature_workflow_refresh_clarifications >/dev/null 2>&1; then
+        feature_workflow_refresh_clarifications || true
+        feature_workflow_gate verify || return 1
+    fi
     local run_id="${OCTOPUS_VERIFY_RUN_ID:-$(date +%s)-$$}"
     if [[ ! "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ || "$run_id" == *..* ]]; then
         log ERROR "Invalid OCTOPUS_VERIFY_RUN_ID: $run_id"
@@ -4489,6 +4624,9 @@ tangle_develop() {
 
     original_project_root="${PROJECT_ROOT:-$PWD}"
     original_pwd="$PWD"
+    if declare -F feature_workflow_preimplement >/dev/null 2>&1; then
+        feature_workflow_preimplement || return 1
+    fi
     resolved_grasp_file="$grasp_file"
     resolved_plan_file=""
     rc=0
@@ -4570,6 +4708,11 @@ _tangle_develop_in_workspace() {
         log INFO "[DRY-RUN] Would tangle: $prompt"
         log INFO "[DRY-RUN] Would decompose into subtasks and execute in parallel"
         return 0
+    fi
+
+    if [[ -n "${FEATURE_TASK_CONTRACT:-}" && "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]]; then
+        feature_tasks_tangle_execute "$prompt" "$grasp_file" "$task_group" "$pre_resolved_plan_file"
+        return $?
     fi
 
     if ! declare -F review_kill_process_tree_frozen >/dev/null 2>&1 \
@@ -4697,6 +4840,10 @@ ${plan_block}"
     # receive plan content instead of an unreadable cross-workspace file path.
     local design_review_synthesis=""
     design_review_ceremony "$resolved_prompt" "$context" design_review_synthesis
+    if declare -F feature_workflow_policy_response >/dev/null 2>&1; then
+        feature_workflow_policy_response "$design_review_synthesis" || true
+        feature_workflow_gate develop "" "${file_ref:-$grasp_file}" || return 1
+    fi
 
     # Step 1: Decompose into validated subtasks
     log INFO "Step 1: Task decomposition..."
@@ -4739,12 +4886,17 @@ $(tangle_decomposition_json_contract_guidance)"
     fi
 
     local subtasks
-    subtasks=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-dispatch-watcher" \
-        tangle_run_decomposition_fallbacks \
-        "$tangle_decompose_agent" "$tangle_decompose_fallback_agent" "$decompose_prompt" 0) || {
-        log ERROR "Decomposition failed with all providers; refusing monolithic direct fallback"
-        return 1
-    }
+    if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+        [[ -f "${OCTOPUS_FEATURE_WAVE_DECOMPOSITION:-}" ]] || return 1
+        subtasks=$(tangle_render_json_decomposition_output "$(<"$OCTOPUS_FEATURE_WAVE_DECOMPOSITION")") || return 1
+    else
+        subtasks=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-dispatch-watcher" \
+            tangle_run_decomposition_fallbacks \
+            "$tangle_decompose_agent" "$tangle_decompose_fallback_agent" "$decompose_prompt" 0) || {
+            log ERROR "Decomposition failed with all providers; refusing monolithic direct fallback"
+            return 1
+        }
+    fi
 
     echo -e "${CYAN}Decomposed into subtasks:${NC}"
     echo "$subtasks"
@@ -4757,6 +4909,7 @@ $(tangle_decomposition_json_contract_guidance)"
 
     local parallel_safety_reason=""
     if [[ $parseable_subtask_count -eq 0 ]] || [[ $parseable_coding_subtask_count -eq 0 ]]; then
+        [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]] || return 1
         local retry_reason="no parseable subtasks"
         [[ $parseable_subtask_count -gt 0 ]] && retry_reason="no parseable [CODING] subtasks"
         log WARN "Decomposition failed validation (${retry_reason}); redecomposing from first principles"
@@ -4770,6 +4923,7 @@ $(tangle_decomposition_json_contract_guidance)"
             return 1
         fi
     elif ! parallel_safety_reason=$(tangle_validate_parallel_write_scopes "$subtasks"); then
+        [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]] || return 1
         local retry_reason="${parallel_safety_reason:-no parseable subtasks}"
         if [[ $parseable_subtask_count -eq 0 ]]; then
             retry_reason="no parseable subtasks"
@@ -4807,6 +4961,7 @@ $(tangle_decomposition_json_contract_guidance)"
     fi
 
     if ! parallel_safety_reason=$(tangle_validate_parallel_write_scopes "$subtasks"); then
+        [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" != true ]] || return 1
         if [[ "$parallel_safety_reason" != *"overlaps subtask"* ]]; then
             log ERROR "Unsafe parallel decomposition after reformat: ${parallel_safety_reason}; refusing direct fallback"
             return 1
@@ -4831,6 +4986,10 @@ $(tangle_decomposition_json_contract_guidance)"
         return 1
     fi
     if ! tangle_decomposition_adequacy_verdict "$adequacy_review"; then
+        if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+            log WARN "Portable task wave failed adequacy review; preserve its identities and request a replan"
+            return 1
+        fi
         local adequacy_reason
         adequacy_reason=$(tangle_decomposition_adequacy_reasons "$adequacy_review")
         [[ -n "$adequacy_reason" ]] || adequacy_reason="review returned FAIL or malformed verdict"
@@ -4840,11 +4999,20 @@ $(tangle_decomposition_json_contract_guidance)"
             log ERROR "Planner reconsideration failed; refusing implementation spawn"
             return 1
         fi
-        planner_decisions=$(tangle_reconsideration_decisions "$reconsideration_response")
-        reconsidered_subtasks=$(tangle_reconsideration_subtasks "$reconsideration_response")
-        if [[ -z "$planner_decisions" || -z "$reconsidered_subtasks" ]]; then
-            log ERROR "Planner reconsideration did not return both DECISIONS and DECOMPOSITION"
+        if ! planner_decisions=$(tangle_reconsideration_decisions "$reconsideration_response"); then
+            log ERROR "Planner reconsideration decisions could not be materialized"
             return 1
+        fi
+        if ! reconsidered_subtasks=$(tangle_reconsideration_subtasks "$reconsideration_response"); then
+            log ERROR "Planner reconsideration decomposition could not be materialized"
+            return 1
+        fi
+        if [[ -z "$reconsidered_subtasks" ]]; then
+            log ERROR "Planner reconsideration did not return a usable DECOMPOSITION"
+            return 1
+        fi
+        if [[ -z "$planner_decisions" ]]; then
+            planner_decisions="- NONE: the adequacy review raised no scope_review recommendations; the decomposition was revised for its semantic findings only."
         fi
         subtasks="$reconsidered_subtasks"
         parseable_subtask_count=$(tangle_parseable_subtask_count "$subtasks")
@@ -4891,6 +5059,10 @@ $(tangle_decomposition_json_contract_guidance)"
         return 125
     fi
 
+    if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+        feature_tasks_revalidate_active_wave || return 1
+    fi
+
     # Coding providers must run behind a parent-owned filesystem boundary.
     export OCTOPUS_TANGLE_EXECUTION_BOUNDARY=true
     export OCTOPUS_TANGLE_WORKTREE="$PROJECT_ROOT"
@@ -4916,6 +5088,15 @@ $(tangle_decomposition_json_contract_guidance)"
     if [[ ${#subtask_lines[@]} -ne $parseable_subtask_count ]]; then
         log ERROR "Parsed $parseable_subtask_count subtasks but retained ${#subtask_lines[@]} for dispatch; refusing partial tangle execution"
         return 1
+    fi
+    local feature_task_ids=()
+    if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+        local feature_tid
+        while IFS= read -r feature_tid; do
+            [[ "$feature_tid" =~ ^T[0-9]{3,9}$ ]] || return 1
+            feature_task_ids+=("$feature_tid")
+        done < <(jq -r '.[]' "$OCTOPUS_FEATURE_WAVE_IDS_FILE")
+        [[ "${#feature_task_ids[@]}" -eq "$parseable_subtask_count" ]] || return 1
     fi
 
     # [CODING] and [REASONING] subtask routing are overridable. This keeps
@@ -4970,6 +5151,9 @@ $(tangle_decomposition_json_contract_guidance)"
         fi
         subtask=$(echo "$subtask" | sed 's/\[CODING\]\s*//; s/\[REASONING\]\s*//')
         local task_id="tangle-${task_group}-${subtask_num}"
+        if [[ "${OCTOPUS_FEATURE_WAVE_ACTIVE:-false}" == true ]]; then
+            task_id="tangle-${task_group}-${feature_task_ids[$subtask_num]}"
+        fi
         local pane_title="$pane_icon Subtask $((subtask_num+1))"
         local subtask_prompt
         subtask_prompt=$(build_tangle_subtask_prompt "$resolved_prompt" "$subtask")
@@ -5111,8 +5295,8 @@ $(tangle_decomposition_json_contract_guidance)"
             _result_file=$(find "${RESULTS_DIR:-${HOME}/.claude-octopus/results}" -maxdepth 1 -type f -name "*-${task_ids[$i]}.md" 2>/dev/null | head -1 || true)
             if [[ -n "$_result_file" ]]; then
                 local _latest_status=""
-                _latest_status=$(grep '^## Status:' "$_result_file" 2>/dev/null | tail -1 || true)
-                if [[ "$_latest_status" == *SUCCESS* ]]; then
+                _latest_status=$(octo_result_launcher_status "$_result_file" 2>/dev/null || true)
+                if [[ "$_latest_status" == "## Status: SUCCESS"* ]]; then
                     mkdir -p "$_done_dir" 2>/dev/null || true
                     echo "0" > "$_done_file" 2>/dev/null || true
                     log INFO "Reconciled late successful result for ${task_ids[$i]} before quality gate"
@@ -5202,7 +5386,7 @@ tangle_changed_paths_outside_write_scopes() {
         matched=false
         while IFS= read -r scope; do
             [[ -n "$scope" ]] || continue
-            if tangle_scopes_overlap "$scope" "$path"; then matched=true; break; fi
+            if tangle_scope_authorizes_path "$scope" "$path" "$baseline_head" "$worktree_before_file"; then matched=true; break; fi
         done <<< "$authorized_scopes"
         [[ "$matched" == true ]] || printf '%s\n' "$path"
     done <<< "$changed_paths" | sed '/^$/d' | sort -u

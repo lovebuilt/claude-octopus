@@ -1269,7 +1269,13 @@ run_agent_sync_consultative() {
 octopus_sync_timeout_override() {
     local caller_timeout="${1:-120}"
     local phase="${2:-}"
+    # Artifact analysis has one fixed call budget shared with its runtime claim.
+    [[ "$phase" != feature-analysis ]] || return 1
     local explicit_secs="${OCTOPUS_TIMEOUT_EXPLICIT_SECS:-}"
+
+    # Council owns a resolved run-wide budget, including its outer watchdog.
+    # Neither a global environment override nor --timeout may replace that cap.
+    [[ "$phase" == "council" ]] && return 1
 
     # Normalize leading zeroes so --timeout 0600 means 600 rather than being
     # ignored, and so the value is never read as octal later.
@@ -1301,7 +1307,7 @@ run_agent_sync() {
     local _timeout_override
     if _timeout_override="$(octopus_sync_timeout_override "$timeout_secs" "$phase")"; then
         timeout_secs="$_timeout_override"
-    elif [[ "$timeout_secs" -eq 120 ]]; then
+    elif [[ "$phase" != "council" && "$timeout_secs" -eq 120 ]]; then
         # v8.19.0: Dynamic timeout calculation (when caller uses default 120)
         local task_type_for_timeout
         task_type_for_timeout=$(classify_task "$prompt" 2>/dev/null) || task_type_for_timeout="standard"
@@ -1351,20 +1357,16 @@ run_agent_sync() {
     enhanced_prompt=$(apply_persona "$role" "$prompt" "false" "")
 
     # v8.21.0: Check for persona pack override (run_agent_sync)
-    if type get_persona_override &>/dev/null 2>&1 && [[ "${OCTOPUS_PERSONA_PACKS:-auto}" != "off" ]]; then
-        local persona_override_file
-        persona_override_file=$(get_persona_override "$agent_type" 2>/dev/null)
-        if [[ -n "$persona_override_file" && -f "$persona_override_file" ]]; then
-            local pack_persona
-            pack_persona=$(cat "$persona_override_file" 2>/dev/null)
-            if [[ -n "$pack_persona" ]]; then
-                enhanced_prompt="${pack_persona}
+    if type get_persona_override_content &>/dev/null 2>&1 && [[ "${OCTOPUS_PERSONA_PACKS:-auto}" != "off" ]]; then
+        local pack_persona
+        pack_persona=$(get_persona_override_content "$agent_type" 2>/dev/null)
+        if [[ -n "$pack_persona" ]]; then
+            enhanced_prompt="${pack_persona}
 
 ---
 
 ${enhanced_prompt}"
-                log "INFO" "Applied persona pack override from: $persona_override_file"
-            fi
+            log "INFO" "Applied persona pack override for: $agent_type"
         fi
     fi
 
@@ -1590,7 +1592,11 @@ ${provider_ctx}"
     local _sync_recovered_sigsegv=false
     local _sync_signal_artifact=""
     case "$agent_type" in
-        agy*|antigravity) _sync_sigsegv_retries=1 ;;
+        agy*|antigravity)
+            if [[ "$phase" != feature-analysis ]]; then
+                _sync_sigsegv_retries=1
+            fi
+            ;;
     esac
 
     while true; do
@@ -1633,6 +1639,7 @@ ${provider_ctx}"
         break
     done
     stop_quota_watcher "$_quota_watcher_pid"
+    quota_watcher_mark_after_exit "$exit_code" "$temp_err" "$temp_out" "${_provider_for_health:-}"
     local _sync_output_truncated=false
 
     local _elapsed_ms
@@ -1677,6 +1684,8 @@ ${provider_ctx}"
         fi
         local _sync_status="failed"
         local _sync_reason="Exit code $exit_code"
+        declare -F octo_failure_reason >/dev/null 2>&1 && \
+            _sync_reason=$(octo_failure_reason "$exit_code" "$enhanced_prompt" "$temp_err" "$temp_out")
         if [[ $exit_code -eq 124 || $exit_code -eq 143 ]]; then
             _sync_status="timeout"
             _sync_reason="Timed out before completion"

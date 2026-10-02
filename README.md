@@ -57,7 +57,7 @@ disable it.
 <!-- BEGIN CURRENT RELEASE -->
 > 🆕 **v11.9.6 — Fix Embrace artifact selection, research citation limits, and cost display.**
 >
-> **Default roster:** Claude Opus 5.5 leads architecture, planning, security reasoning, and final judgment; GPT-5.6 Sol is the independent implementation/review peer; Claude Sonnet 5 is the standard Claude seat; Fable 5.1 remains an opt-in judgment escalation. Existing model pins and provider configuration still win. See [the routing strategy](docs/MODEL-ROUTING-STRATEGY.md).
+> **Default roster:** Claude Opus 5.5 leads architecture, planning, security reasoning, and final judgment; GPT-5.6 Sol is the independent implementation/review peer; Claude Sonnet 5.5 is the standard Claude seat; Fable 5.1 remains an opt-in judgment escalation. Existing model pins and provider configuration still win. See [the routing strategy](docs/MODEL-ROUTING-STRATEGY.md).
 <!-- END CURRENT RELEASE -->
 >
 > ```bash
@@ -105,7 +105,7 @@ rollback details.
 <summary>Upgrading to 9.5x</summary>
 
 <!-- BEGIN CURRENT MODEL DEFAULTS -->
-- Current fresh configurations use **GPT-5.6 Sol** for Codex implementation/review, **Claude Opus 5.5** for premium Claude work, and **Claude Sonnet 5** for the standard Claude seat. Existing environment, session, and `providers.json` pins remain unchanged; `OCTOPUS_LEGACY_ROLES=1` restores the pre-frontier role mapping.
+- Current fresh configurations use **GPT-5.6 Sol** for Codex implementation/review, **Claude Opus 5.5** for premium Claude work, and **Claude Sonnet 5.5** for the standard Claude seat. Existing environment, session, and `providers.json` pins remain unchanged; `OCTOPUS_LEGACY_ROLES=1` restores the pre-frontier role mapping.
 <!-- END CURRENT MODEL DEFAULTS -->
 - New claude-sdk seat env vars (v9.50): `CLAUDE_SDK_API_KEY`, `OCTOPUS_CLAUDE_SDK_MODEL`, `OCTOPUS_CLAUDE_SDK_MAX_TOKENS`, `OCTOPUS_CLAUDE_SDK_ALLOWED_MODELS`, `OCTOPUS_CLAUDE_SDK_CONTEXT_BUDGET`.
 - Fable guards apply to `claude-fable-5-1` and preserved `claude-fable-5` pins. `OCTOPUS_FABLE5_MAX_EFFORT` raises the default `high` ceiling without disabling the other guards.
@@ -126,10 +126,10 @@ claude plugin install octo@nyldn-plugins
 
 That's it. Setup detects installed providers, shows what's missing, and walks you through configuration. You need **zero** external providers to start — Claude is built in.
 
-**Supported platforms:** Linux and macOS run natively. On Windows, run Claude
-Octopus inside [WSL](#using-cursor-on-wsl); native Git Bash, MSYS2, and Cygwin
-are not supported. Under Codex on native Windows, Octopus hooks exit without
-running, so an installed plugin stays inert rather than opening shell windows.
+**Supported platforms:** Linux and macOS run natively. For Windows, use the
+[Claude Code CLI inside WSL or a desktop SSH session](#using-claude-code-from-windows).
+Native Git Bash, MSYS2, and Cygwin are unsupported. Octopus hooks exit immediately
+on those hosts in Claude Code and Codex, without writing install or session state.
 
 ### Dormant by default
 
@@ -202,7 +202,7 @@ lifecycle hooks.
 See [installation health](docs/INSTALLATION-HEALTH.md) for exit codes and stored
 state.
 
-Claude Code **v2.1.14+** is the minimum supported runtime. Newer Claude Code releases unlock additional Octopus diagnostics and release checks automatically; the current plugin tracks 184 Claude Code capability flags through **Claude Code v2.1.280**.
+Claude Code **v2.1.14+** is the minimum supported runtime. Newer Claude Code releases unlock additional Octopus diagnostics and release checks automatically; the current plugin tracks 185 Claude Code capability flags through **Claude Code v2.1.284**.
 
 <details>
 <summary>Install for Codex CLI</summary>
@@ -264,6 +264,17 @@ cd ~/.cursor/claude-octopus/mcp-server && npm install
 ```
 
 Restart Cursor. Tools appear in Cursor's AI chat — invoke by asking e.g. "use octopus_discover to research X".
+
+### Using Claude Code from Windows
+
+Install and launch the Claude Code CLI inside your WSL distribution, then install
+Octopus there. Run `claude` from the WSL terminal. Its Linux home has its own
+plugins and settings; a Windows-side installation does not carry over.
+
+For Claude Code Desktop, select an SSH environment connected to a Linux or macOS
+host and install Octopus on that host. The desktop app's built-in WSL environment
+currently does not load plugins. See the official [WSL limitations](https://code.claude.com/docs/en/desktop-wsl)
+and [desktop SSH guide](https://code.claude.com/docs/en/desktop#ssh-sessions).
 
 ### Using Cursor on WSL
 

@@ -47,6 +47,7 @@ resolve_provider_to_agent() {
                                 agent="$provider" ;;
         openai-compatible|openai-tools|openai-compatible-agent)
                                 agent="$provider" ;;
+        anthropic-api)         agent="$provider" ;;
         perplexity|perplexity-fast)
                                 agent="$provider" ;;
         qwen|qwen-research)     agent="$provider" ;;

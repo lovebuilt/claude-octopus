@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus — PostCompact Hook (v9.19.0)
 # Fires AFTER context compaction completes. Reads state persisted by
 # pre-compact.sh and re-injects critical workflow context that compaction dropped.

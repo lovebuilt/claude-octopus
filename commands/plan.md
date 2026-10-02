@@ -88,17 +88,36 @@ reads or writes `${OCTO_PLAN_DIR}/session-intent.md` and
 `.claude/session-intent.md` or `.claude/session-plan.md` literal:**
 
 ```bash
-PLAN_STORAGE="${CLAUDE_PLUGIN_ROOT:-${HOME}/.claude-octopus/plugin}/scripts/plan-storage.sh"
+OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-${HOME}/.claude-octopus/plugin}"
+PLAN_STORAGE="$OCTO_ROOT/scripts/plan-storage.sh"
+FEATURE_CONTEXT=$(bash "$OCTO_ROOT/scripts/helpers/feature-workflow.sh" prepare plan "<feature name>" "${OCTOPUS_FEATURE:-}")
+if jq -e '.ambiguous == true' <<< "$FEATURE_CONTEXT" >/dev/null; then
+  echo "Select a feature directory before planning"
+  exit 1
+fi
+if jq -e 'has("spec_path")' <<< "$FEATURE_CONTEXT" >/dev/null; then
+  FEATURE_SELECTOR=$(jq -r 'if .feature == "" then .spec_path else .feature end' <<< "$FEATURE_CONTEXT")
+  FEATURE_RUNTIME_DIR=$(jq -r '.runtime_dir' <<< "$FEATURE_CONTEXT")
+  OCTOPUS_SESSION_PLANS="$FEATURE_RUNTIME_DIR/plan-drafts"
+  export OCTOPUS_SESSION_PLANS
+  bash "$OCTO_ROOT/scripts/helpers/feature-workflow.sh" boundary plan "$FEATURE_SELECTOR"
+fi
 OCTO_PLAN_DIR="$("$PLAN_STORAGE" create "$PWD")" || {
-  echo "Unable to resolve safe plan artifact storage" >&2
+  echo "Unable to resolve safe plan draft storage" >&2
   exit 1
 }
-echo "Plan artifacts will be saved to: ${OCTO_PLAN_DIR}"
+echo "Plan draft directory: ${OCTO_PLAN_DIR}"
 ```
+
+If several features exist, ask the user to select one with the host question tool, then rerun storage resolution. Do not choose the newest directory.
 
 The resolver hard-blocks the global `~/.claude/` directory, detects git and marker-file project roots, creates a unique directory for every invocation, and records that directory for the current host session and workspace. Running `/octo:plan` from `$HOME` or another non-project directory uses `~/.claude-octopus/sessions/<session-id>/plans/<run-id>/`. Project runs use `<project-root>/.octo/plans/<run-id>/`.
 
 Keep the absolute path printed by the resolver and use that exact path in every later Read, Write, Edit, and Bash action. If the path must be recovered in a later shell, run `"$PLAN_STORAGE" current "$PWD"`. Report the resolved absolute path, not a relative placeholder, in every confirmation message shown to the user.
+
+When a portable feature is selected, drafts stay in runtime and the accepted plan and task contract are published into that feature. Read the bound policy source, digest and numbered passages before planning. Present the boundary's question batch once through the available native host question tool. Skipped or noninteractive questions remain open. Preserve the feature's prior task identities and retired-ID history.
+
+Planning emits an `octopus-tasks` JSON fence with schema_version 1, the selected feature_id and tasks. Every task has a persistent T001-style ID and identity, requirement links, kind, title, reads, files, creates, dependencies, parallel_hint and status. Use the existing IDs on replan. Split tasks use new IDs and a supersedes relation. A parallel hint can reduce concurrency; the dispatcher independently resolves paths and working-tree state at every wave.
 
 ### Provider preflight
 
@@ -390,6 +409,16 @@ status other than `available` cannot be displayed as a completed provider seat.
 **PROHIBITED: Displaying only "🔵 Claude: Available ✓" without listing all providers.**
 
 ### Step 5: Save the Plan
+
+For a selected feature, Write/Edit only the runtime drafts. Publish the accepted plan through the shared writer:
+
+```bash
+bash "$OCTO_ROOT/scripts/helpers/feature-workflow.sh" save plan \
+  "$OCTO_PLAN_DIR/session-plan.md" "<actual author provider>" "<actual model or unknown>" \
+  "<planning run id>" "$FEATURE_SELECTOR"
+```
+
+The adapter reconciles and publishes the labelled task contract as `tasks.md`, with persistent IDs and retirement history. Failed identity reconciliation keeps the prior contract and warns. All portable writes pass redaction and scanning. Legacy plans without feature context retain the existing storage and execution path.
 
 **CRITICAL: The plan command creates plans, it does NOT execute them by default.**
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+
 # testing.sh — Extracted from orchestrate.sh
 # Contains: validate_tangle_results, squeeze_test
 
@@ -389,10 +391,10 @@ tangle_check_supabase_migration_history() {
 tangle_result_latest_status() {
     local result="$1"
     local status_line=""
-    status_line=$(grep '^## Status:' "$result" 2>/dev/null | tail -1 || true)
+    status_line=$(octo_result_launcher_status "$result" 2>/dev/null || true)
     case "$status_line" in
-        *SUCCESS*) echo "success" ;;
-        *FAILED*|*TIMEOUT*|*STALLED*|*ERROR*) echo "failed" ;;
+        "## Status: SUCCESS"*) echo "success" ;;
+        "## Status: FAILED"*|"## Status: TIMEOUT"*|"## Status: STALLED"*|"## Status: ERROR"*) echo "failed" ;;
         *) echo "unknown" ;;
     esac
 }
@@ -400,9 +402,9 @@ tangle_result_latest_status() {
 tangle_result_terminal_outcome() {
     local result="$1"
     local status_line=""
-    status_line=$(grep '^## Status:' "$result" 2>/dev/null | tail -1 || true)
+    status_line=$(octo_result_launcher_status "$result" 2>/dev/null || true)
     case "$status_line" in
-        *SUCCESS*)
+        "## Status: SUCCESS"*)
             if tangle_result_has_blocker_output "$result"; then
                 echo "blocked"
             else

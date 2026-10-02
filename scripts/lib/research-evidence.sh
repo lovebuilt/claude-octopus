@@ -364,6 +364,14 @@ research_synthesis_publish() {
     research_run_update "complete" "completed" "synthesis=$synthesis_file"
 }
 
+research_synthesis_repairable_findings() {
+    local report="$1"
+    [[ -r "$report" ]] && command -v jq >/dev/null 2>&1 || return 0
+    jq -r '.checks[]
+        | select(.kind | IN("missing_citation", "unresolved_local_citation", "unknown_source", "false_consensus", "number_mismatch", "quote_mismatch"))
+        | "- line \(.line) [\(.kind)]: \(.detail)"' "$report" 2>/dev/null || true
+}
+
 research_url_parts() {
     local url="$1"
     local re='^https://([^/?#]+)(/[^?#]*)?(\?[^#]*)?([#].*)?$'
@@ -553,6 +561,7 @@ research_physical_path() {
 
 research_local_citation_tokens() {
     printf '%s\n' "$1" \
+        | sed -E 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]*##g' \
         | grep -Eo '[A-Za-z0-9_.@+~/-]*[./][A-Za-z0-9_.@+~/-]*:[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*' \
         | awk '!seen[$0]++ { print length($0) "\t" $0 }' | sort -rn | cut -f2- || true
 }
@@ -605,9 +614,31 @@ research_source_field() {
 
 research_extract_numbers() {
     local line="$1"
-    # Do not mistake ordered-list markers ("1." / "2)") for factual values.
-    line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*([-*+][[:space:]]*)?[0-9]+[.)][[:space:]]*//')
-    printf '%s\n' "$line" | grep -Eo '[0-9]+([.,][0-9]+)*%?' | sort -u || true
+    # Do not mistake ordered-list markers ("1." / "2)" / "**3.**") for
+    # factual values.
+    line=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*([-*+][[:space:]]*)?(\*\*|__|\*|_)?[0-9]+[.)](\*\*|__|\*|_)?[[:space:]]+//')
+    printf '%s\n' "$line" | research_numeric_claims | sort -u || true
+}
+
+research_numeric_claims() {
+    LC_ALL=C awk '{
+        line = $0; pos = 1; id_end = -1
+        while (match(substr(line, pos), /[0-9]+([.,][0-9]+)*%?/)) {
+            start = pos + RSTART - 1; len = RLENGTH; pos = start + len
+            before = substr(line, 1, start - 1); after = substr(line, pos)
+            match(before, /[0-9A-Za-z]*$/); word = substr(before, RSTART)
+            match(after, /^[0-9A-Za-z]*/); word = word substr(line, start, len) substr(after, 1, RLENGTH)
+            hyphen_word = ""
+            if (match(before, /[0-9A-Za-z]+-$/)) hyphen_word = substr(before, RSTART, RLENGTH - 1)
+            if (before ~ /([A-Za-z_#]|\302\247)$/ || hyphen_word ~ /^[A-Za-z]/ \
+                || (start == id_end + 1 && before ~ /-$/) \
+                || (length(word) >= 7 && length(word) <= 40 && word ~ /^[0-9a-f]*[a-f][0-9a-f]*$/)) {
+                id_end = pos
+                continue
+            }
+            print substr(line, start, len)
+        }
+    }'
 }
 
 research_number_in_snapshot() {
@@ -706,7 +737,7 @@ research_verify_synthesis() {
     local claim_count=0 failures=0 warnings=0 line_no=0 line plain_line ids id invalid groups group unique_groups
     local in_fence=false
     local snapshot normalized number quote numbers quotes score source_json groups_json
-    local project_root token resolved local_refs local_files local_ref local_json evidence_file
+    local project_root token resolved local_refs local_files local_ref local_json evidence_file unresolved_refs
     local local_index cached_index cache_bytes cached_bytes=0 cache_error=false
     local max_cache_bytes="${OCTOPUS_RESEARCH_MAX_LOCAL_CACHE_BYTES:-16777216}"
     [[ "$max_cache_bytes" =~ ^[0-9]{1,15}$ ]] || max_cache_bytes=16777216
@@ -732,10 +763,17 @@ research_verify_synthesis() {
         [[ "$line" == \#* || "$line" == '---'* ]] && continue
         ids=$(printf '%s\n' "$line" | grep -Eo '\[source:S[0-9]{3}\]' | sed 's/\[source:\(.*\)\]/\1/' | sort -u || true)
         plain_line=$(printf '%s\n' "$line" | sed 's/\[source:S[0-9][0-9][0-9]\]//g')
-        local_refs=""; local_files=""
+        local_refs=""; local_files=""; unresolved_refs=false
         while IFS= read -r token; do
             [[ -n "$token" ]] || continue
-            resolved=$(research_resolve_local_citation "$project_root" "$token") || continue
+            if ! resolved=$(research_resolve_local_citation "$project_root" "$token"); then
+                [[ "$token" != //* && "${token%:*}" == *[A-Za-z]* ]] || continue
+                plain_line=${plain_line//$token/}
+                unresolved_refs=true
+                failures=$((failures + 1))
+                printf 'unresolved_local_citation|%s|%s\n' "$line_no" "$token" >> "$findings"
+                continue
+            fi
             plain_line=${plain_line//$token/}
             local_refs="${local_refs}${resolved%%|*}:${token##*:}"$'\n'
             local_files="${local_files}${resolved#*|}"$'\n'
@@ -744,7 +782,7 @@ research_verify_synthesis() {
         local_files=$(printf '%s' "$local_files" | awk '!seen[$0]++')
         numbers=$(research_extract_numbers "$plain_line")
         quotes=$(printf '%s\n' "$plain_line" | awk '{ s=$0; while (match(s, /"[^"][^"][^"][^"]+"/)) { print substr(s,RSTART+1,RLENGTH-2); s=substr(s,RSTART+RLENGTH) } }')
-        if [[ -z "$ids" && -z "$local_refs" && ( -n "$numbers" || -n "$quotes" ) \
+        if [[ -z "$ids" && -z "$local_refs" && "$unresolved_refs" == "false" && ( -n "$numbers" || -n "$quotes" ) \
               && "$line" != *"[inference]"* && "$line" != *"[opinion"* ]]; then
             failures=$((failures + 1))
             printf 'missing_citation|%s|%s\n' "$line_no" "$line" >> "$findings"

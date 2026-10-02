@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Spec and planning workflows keep distilled research, intent, decisions and
+  stable task identities in portable feature directories. Existing root specs
+  and Spec Kit layouts remain usable. `OCTOPUS_FEATURE_LAYOUT=legacy` retains
+  root-file behavior through the next minor release.
+- Project policy is bound before workflow seats run. Open user decisions persist
+  across planning and resume, and affected tasks wait for answers. Development
+  checks artifact consistency before requesting at most one independent review.
+  Dispatch validates file scopes and dependencies on every task wave. Fresh-clone
+  completion claims require current committed files and fresh verification.
+
 ### Fixed
 
 - The Perplexity provider now uses the Agent API directly. Sonar chat
@@ -21,6 +33,82 @@
   markers such as `[web:1]`. Annotation URLs without a reliable result ID
   appear as unnumbered links. The quota probe uses the same endpoint with
   tool calls disabled.
+- Review and brainstorm advisors read provider answers from completed result files
+  and permit Team mode dispatch. Codex guards allow supported noninteractive
+  subcommands and help requests while continuing to reject interactive prompts.
+- Planner reconsideration accepts a valid empty scope-decision list, checks that
+  the revised decomposition can be materialized, and retains the explanation for
+  the next adequacy review.
+- Reference checks distinguish continued command arguments from source commands.
+- Framework JSON contracts carry a random process marker, preventing repository
+  prose from being promoted to a protected response contract during prompt fitting.
+  Source-safe workflow and design-review calls load the marker helper directly.
+- Linux cancellation enumerates children through procfs PPIDs when per-thread
+  child lists are unavailable, and parses process names as bytes.
+- Native Windows Claude Code hooks return before parsing input or writing state.
+  Windows guidance distinguishes the CLI inside WSL from desktop SSH sessions.
+- Council runs enforce an aggregate deadline, preserve completed advice in a
+  partial result, and report session identity and artifact digest in summary.json.
+  run-status.json reports session identity. An opt-in supersede key marks earlier
+  matching rounds and preserves that mark when an older round finishes.
+- Research evidence verification no longer reads the digits of an identifier
+  as a numeric claim. Ticket and requirement IDs (`PLAT-1181`, `T-1`, `R2`),
+  `#1728`, `§4.2`, `p95` and git SHAs such as `89a941fda` were extracted as
+  numbers, so a line that only named them failed with `missing_citation`, and
+  one that also cited a file failed with `number_mismatch` for SHA fragments
+  such as `34478150`. Standalone numbers, percentages, decimals, numbers with
+  a unit suffix (`15m`, `5xx`) and ranges (`10-13`) are still checked.
+- A workspace citation that does not resolve, such as a basename
+  `production-alerting.md:247` for a file under `.docs/`, now fails with
+  `unresolved_local_citation` naming the citation. Its line numbers were
+  checked as numbers, so the claim failed with `missing_citation`, or with a
+  `number_mismatch` for each line number against another file cited on the
+  same line.
+- A probe synthesis that fails mechanical evidence verification now gets one
+  repair pass before publication is blocked. The synthesizer that wrote the
+  draft receives the verifier's repairable findings (missing or elided
+  citations, unresolved workspace paths, unknown sources, false consensus,
+  number and quote mismatches),
+  the evidence catalog and the numbered draft, and the corrected draft is
+  verified again. Previously one citation-format slip, such as `:42` in place
+  of `src/app.ts:42`, discarded a usable synthesis and failed the probe. A
+  repair returned inside a code fence is unwrapped first, since the verifier
+  skips fenced text. Empty repairs and unmatched outer fences are rejected,
+  and separate code blocks cannot hide claims between them.
+- Evidence verification no longer checks an emphasized ordered-list marker,
+  such as `**4.` or `__2.`, as a cited number. Plain `1.` and `2)` markers
+  were already skipped, so a synthesis that bolded its numbered findings
+  failed with a `number_mismatch` for each marker on a line with citations.
+  Emphasized decimal values such as `**503.5%**` remain complete claims.
+- A probe whose synthesizer fails no longer caches the compact fallback. The
+  stub carries no findings, and caching it served the same empty synthesis to
+  every retry of that prompt for the cache TTL, so re-running Discover after
+  restoring the synthesizer returned nothing new.
+- Review result parsing skips the exact dispatched prompt and reads the
+  launcher's Output section. Headings echoed in a stderr transcript no longer
+  replace real findings. An answered seat without findings JSON reports
+  incomplete coverage instead of a successful review. Terminal-status checks
+  also skip provider text, so echoed status headings cannot stop supervision,
+  turn a failed seat into a success, or trigger an empty-output retry. Native
+  metrics and raw-output copies share the launcher nonce frame, and workflow,
+  probe, and tangle status checks use the same trusted status reader. A hook
+  capture phrase echoed in a prompt cannot bypass subprocess output capture.
+  Standalone probe results frame stdout and stderr too, and refuse to launch
+  when a result nonce cannot be generated.
+- Review debate requires a reason and code or contract evidence before it
+  excludes a contested finding. Unsupported decisions retain the finding.
+  The final artifact, reports, and debate audit keep excluded findings with
+  their original identity, decision, reason, and evidence.
+
+- Council research previews and Graphify report context reject symlinks and
+  paths outside their local corpus. Preview reads use the validated file
+  descriptor and a byte limit, including reports with very long lines.
+  Graphify context keeps its closing Markdown fence within the prompt budget.
+- Persona packs no longer load implicitly from the current repository.
+  Overrides require an approved root and reject traversal and symlinked files.
+  Explicit discovery and pack application retain approval for the current run.
+  Prompt consumers read bounded content through directory descriptors, so a
+  replaced persona file or pack cannot redirect the read to an external file.
 - `orchestrate.sh --dry-run parallel <tasks.json>` no longer reports every task
   as a failed spawn. A dry-run spawn prints the command it would run but no
   provider PID, and parallel execution still waited for one, so each valid task
@@ -39,6 +127,48 @@
   Round 1 reviewer and stops there without opening a proof packet. Past the
   existing target and fleet checks, it fails only when no reviewer command can
   be rendered.
+- `/octo:review` reports the real cause when a provider seat fails. Codex
+  echoes the whole prompt into its stderr transcript, which the result file
+  keeps under `## Error Log`, and the failure-detail parser stopped at the
+  first Markdown heading in that echo. Provider Status and "Provider failure
+  details" therefore showed a line of the prompt instead of the transcript's
+  closing `ERROR: You've hit your usage limit` line. Only the result writer's
+  own headers now end a section. The detail is the last `ERROR:` line (the
+  message, for a codex JSON error), then the last line that reads as an
+  error, then the first line. Neither fallback picks a line that repeats the
+  prompt.
+
+- The provider smoke test now checks the `claude` CLI that runs Claude seats.
+  Those seats are `claude --print` subprocesses using the CLI's own login, not
+  the host session's, and the smoke test only exercised codex, cursor-agent and
+  agy. With an expired OAuth session, preflight passed, and every Claude
+  researcher and the Claude synthesizer then exited 1 after the other
+  providers had finished the phase, leaving an empty synthesis. A Claude CLI
+  that answers with an error now fails preflight with the login fix; a timeout
+  stays degraded, including when Claude is the only provider.
+  `OCTOPUS_CLAUDE_SMOKE_TIMEOUT` sets the wait (default 60s), and the check is
+  skipped when `OCTO_ALLOWED_PROVIDERS` excludes Claude. The smoke-test cache
+  key now records whether Claude is checked, with its binary and model, so a
+  success cached without the Claude check no longer skips it.
+- A codex seat that runs out of ChatGPT plan usage is now marked quota-dead for
+  the session. The quota pattern had no signature for codex's
+  `ERROR: You've hit your usage limit` line, and the watcher only acts while the
+  provider is still running, over two polls, so a CLI that prints a terminal
+  quota error and exits at once was never marked by any pattern. Each failed
+  seat was then reported as `contract-ineligible`, and every later seat was
+  dispatched into the same failure. Spawned and synchronous dispatch now check
+  the final output of a failed exit for a terminal quota signature.
+- A failed provider seat now records the provider's own error line as its
+  reason. `codex exec` on a spent ChatGPT plan prints `ERROR: You've hit your
+  usage limit. … try again at 10:25 PM.` and exits 1, but the seat was
+  recorded only as `Exit code 1`. That was all the agent run summary and the
+  synthesis prompt's agent status showed, and the probe listing said
+  `unusable (contract-ineligible)`. Background, synchronous and single-probe
+  dispatch now record the last `ERROR:` line of the provider's stderr, or of
+  its stdout, as `Exit code 1: You've hit your usage limit. …`. Lines that
+  repeat the dispatched prompt are skipped, since codex echoes the prompt to
+  stderr. The probe listing shows a failed seat's recorded reason in place of
+  `contract-ineligible`.
 
 ## [11.9.6] - 2026-09-29
 

@@ -3,6 +3,7 @@
 unit/test-council-command.sh	314
 unit/test-kimi-provider.sh	52
 unit/test-octo-events.sh	48
+unit/test-consultative-advisor-launch.sh	48
 unit/test-provider-availability-parity.sh	33
 unit/test-agy-provider.sh	32
 unit/test-consultative-workspace-gitignore.sh	32
@@ -21,3 +22,11 @@ unit/test-provider-banner-auth.sh	16
 unit/test-safe-github-comments.sh	16
 unit/test-routing.sh	15
 unit/test-cli-flag-after-subcommand.sh	14
+unit/test-feature-artifacts.sh	3
+unit/test-feature-policy.sh	2
+unit/test-feature-clarifications.sh	3
+unit/test-feature-analysis.sh	4
+unit/test-feature-analysis-runtime.sh	9
+unit/test-feature-tasks.sh	50
+unit/test-feature-workflow.sh	16
+unit/test-feature-delivery.sh	35

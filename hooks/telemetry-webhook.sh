@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # Claude Octopus Telemetry Webhook Hook
 # v8.29.0: PostToolUse hook that POSTs phase completion data to configured webhook URL
 # v8.41.0: HTTP hook alternative available — when SUPPORTS_HTTP_HOOKS=true (CC v2.1.63+),

@@ -252,4 +252,50 @@ else
     test_fail "scope violations were not rendered as distinct lines"
 fi
 
+test_case "write authorization keeps exact case and cannot widen to an ancestor"
+saved_changed_paths_function="$(declare -f check_tangle_worktree_changes)"
+check_tangle_worktree_changes() {
+    printf '%s\n' src/Existing.ts src package.json/child web/js/app.js Web/other.js
+}
+exact_violations=$(tangle_changed_paths_outside_write_scopes \
+    '1. [CODING] Edit source — Files: src/existing.ts, package.json — Creates: web/ — Task: edit declared files.' "$BEFORE")
+eval "$saved_changed_paths_function"
+# Compare exact paths independently of the host's collation order.
+exact_violations=$(printf '%s\n' "$exact_violations" | LC_ALL=C sort)
+if [[ "$exact_violations" == $'Web/other.js\npackage.json/child\nsrc\nsrc/Existing.ts' ]]; then
+    test_pass
+else
+    test_fail "scope collision comparison widened exact authority: $exact_violations"
+fi
+
+test_case "workers cannot turn authorized files into directory write authority"
+printf 'fixture\n' > "$TMP_REPO/CONFIG"
+replacement_before="$RESULTS_DIR/replacement-before.txt"
+replacement_state="$RESULTS_DIR/replacement-before-state.txt"
+snapshot_tangle_worktree_paths > "$replacement_before"
+snapshot_tangle_worktree_state > "$replacement_state"
+replacement_head=$(git -C "$TMP_REPO" rev-parse HEAD)
+replacement_subtasks='1. [CODING] Edit config — Files: package.json, CONFIG — Task: edit only the two declared files.'
+cp "$TMP_REPO/package.json" "$RESULTS_DIR/package-before.json"
+rm "$TMP_REPO/package.json" "$TMP_REPO/CONFIG"
+mkdir "$TMP_REPO/package.json" "$TMP_REPO/CONFIG"
+printf 'unauthorized\n' > "$TMP_REPO/package.json/child"
+printf 'unauthorized\n' > "$TMP_REPO/CONFIG/child"
+replacement_violations=$(tangle_changed_paths_outside_write_scopes "$replacement_subtasks" \
+    "$replacement_before" "$replacement_head" "$replacement_state")
+VALIDATE_CALLS=0
+replacement_rc=0
+tangle_validate_results_with_scope_contract replacement 'Edit config' \
+    "$replacement_before" "$replacement_subtasks" "$replacement_head" \
+    "$(tangle_scope_manifest_digest "$replacement_subtasks")" "$replacement_state" || replacement_rc=$?
+if [[ "$replacement_violations" == $'CONFIG/child\npackage.json/child' \
+        && "$replacement_rc" -ne 0 && "$VALIDATE_CALLS" -eq 0 ]]; then
+    test_pass
+else
+    test_fail "worker filesystem edits widened authority: $replacement_violations status=$replacement_rc calls=$VALIDATE_CALLS"
+fi
+rm "$TMP_REPO/package.json/child" "$TMP_REPO/CONFIG/child"
+rmdir "$TMP_REPO/package.json" "$TMP_REPO/CONFIG"
+cp "$RESULTS_DIR/package-before.json" "$TMP_REPO/package.json"
+
 test_summary

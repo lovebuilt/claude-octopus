@@ -10,6 +10,9 @@
 # Extracted from orchestrate.sh (v9.7.8)
 # Source-safe: no main execution block.
 
+# shellcheck source=scripts/lib/json-contract.sh
+source "${BASH_SOURCE[0]%/*}/json-contract.sh" || return 1
+
 
 _quality_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/agent-sync.sh
@@ -723,6 +726,7 @@ You are participating in a design review ceremony before implementation begins.
 Task: $prompt
 ${context:+Context: $context}
 
+$(octo_protect_json_contract "$(cat <<'CONTRACT'
 Return ONLY JSON matching Design Review Seat schema v1:
 {"schema_version":1,"approach":["..."],"dependencies":["..."],"risks":[{"risk":"...","mitigation":"..."}],"testing":["..."],"integration":["..."]}
 Rules:
@@ -731,6 +735,8 @@ Rules:
 - risks contains concrete risk+mitigation objects; use [] when none.
 - planning only: do not claim implementation, changed files, executed tests, or verified runtime state.
 - do not emit Markdown or prose before/after JSON.
+CONTRACT
+)")
 EOF
 )"
 
@@ -834,6 +840,7 @@ ${seat_2_approach:-[unavailable]}
 SEAT 3 - ${seat_3_label}:
 ${seat_3_approach:-[unavailable]}
 
+$(octo_protect_json_contract "$(cat <<'CONTRACT'
 Return ONLY JSON matching Design Review Synthesis schema v1:
 {"schema_version":1,"conflicts":["..."],"gaps":["..."],"resolution":"...","risks":[{"risk":"...","mitigation":"..."}],"decisions":["..."]}
 Rules:
@@ -842,6 +849,8 @@ Rules:
 - risks contains concrete risk+mitigation objects; decisions contains actionable planning decisions.
 - the SEAT blocks above are JSON planning inputs, not verified execution evidence.
 - do not emit Markdown or prose before/after JSON.
+CONTRACT
+)")
 EOF
 )"
     design_reserved="$design_implementer_agent $design_researcher_agent $design_code_reviewer_agent $design_synthesizer_agent"

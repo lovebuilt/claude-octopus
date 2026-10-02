@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Native Windows has no supported Octopus runtime.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
 # discipline-task-gate.sh — Brainstorm gate reminder on TaskCreated
 # Only fires when discipline mode is on
 

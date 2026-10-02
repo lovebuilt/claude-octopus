@@ -168,8 +168,30 @@ def normalize_reasoning_effort(value):
 
 
 def is_astra_model(model):
-    transport_model = model.split(":", 1)[-1]
-    return transport_model.rsplit("/", 1)[-1] == "gpt-6-astra"
+    return canonical_model_id(model) == "gpt-6-astra"
+
+
+def canonical_model_id(model):
+    transport_model = model
+    # Provider qualifiers precede the vendor namespace. A colon after the
+    # slash is a model modifier, which must not hide a GPT-6 transport guard.
+    colon, slash = model.find(":"), model.find("/")
+    if colon >= 0 and (slash < 0 or colon < slash):
+        prefix, remainder = model.split(":", 1)
+        if prefix not in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"}:
+            transport_model = remainder
+    return transport_model.rsplit("/", 1)[-1].split(":", 1)[0]
+
+
+def validate_chat_model(model, reasoning_effort, tool_policy):
+    model_id = canonical_model_id(model)
+    if model_id in {"gpt-6-astra", "gpt-6.1-sol"}:
+        if tool_policy == "auto":
+            raise ValueError(f"{model_id} tools require the Responses API; use Codex CLI or --tool-policy none")
+        if reasoning_effort in {"none", "minimal"}:
+            raise ValueError(f"{model_id} does not support reasoning effort {reasoning_effort}; use low or higher")
+    if model_id in {"gpt-6-sol", "gpt-6-luna"} and tool_policy == "auto" and reasoning_effort != "none":
+        raise ValueError(f"{model_id} Chat Completions tools require --reasoning-effort none; use Codex CLI for reasoning with tools")
 
 
 def rejects_reasoning_effort(body_text):
@@ -214,10 +236,10 @@ def open_credentialed_request(req, timeout):
 
 
 def api_call(base_url, key, model, headers_extra, messages, max_tokens=0, request_timeout=60.0, max_retries=3, reasoning_effort=None, reasoning_policy="best_effort", tool_policy="auto"):
-    if is_astra_model(model) and tool_policy == "auto":
-        raise ValueError("gpt-6-astra tools require the Responses API; this adapter uses Chat Completions")
+    validate_chat_model(model, reasoning_effort, tool_policy)
     payload = {"model": model, "messages": messages}
-    if not is_astra_model(model):
+    model_id = canonical_model_id(model)
+    if model_id not in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} or reasoning_effort == "none":
         payload["temperature"] = 0
     if tool_policy == "auto":
         payload["tools"] = TOOLS
@@ -254,6 +276,13 @@ def api_call(base_url, key, model, headers_extra, messages, max_tokens=0, reques
                 and e.code in {400, 422}
                 and rejects_reasoning_effort(body_text)
             ):
+                try:
+                    validate_chat_model(model, None, tool_policy)
+                except ValueError as error:
+                    raise RuntimeError(
+                        f"HTTP {e.code}: gateway rejected required reasoning_effort={reasoning_effort}; "
+                        "cannot retry without it. Use Codex CLI or --tool-policy none"
+                    ) from error
                 print("chat_reasoning_fallback unsupported reasoning_effort; retrying without it", file=sys.stderr)
                 return api_call(
                     base_url, key, model, headers_extra, messages,
@@ -286,7 +315,7 @@ def main() -> int:
     ap.add_argument("--base-url"); ap.add_argument("--api-key-env"); ap.add_argument("--model")
     ap.add_argument("--cwd", required=True)
     ap.add_argument("--prompt")
-    ap.add_argument("--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--reasoning-effort", choices=["none", "low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--reasoning-policy", choices=["strict", "best_effort"], default="best_effort")
     ap.add_argument("--tool-policy", choices=["auto", "none"], default="auto")
     args = ap.parse_args(); cfg = PROVIDERS[args.provider]
@@ -299,8 +328,10 @@ def main() -> int:
     if not model:
         model_hint = "ATLASCLOUD_MODEL, OCTOPUS_ATLASCLOUD_MODEL, OPENAI_COMPAT_MODEL, or --model" if args.provider == "atlascloud" else "OPENAI_COMPAT_MODEL or --model"
         print(f"ERROR: missing {model_hint}", file=sys.stderr); return 2
-    if is_astra_model(model) and args.tool_policy == "auto":
-        print("ERROR: gpt-6-astra tools require the Responses API; use Codex CLI or --tool-policy none", file=sys.stderr)
+    try:
+        validate_chat_model(model, args.reasoning_effort, args.tool_policy)
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         return 2
     if not base_url:
         print("ERROR: missing OPENAI_COMPAT_BASE_URL or --base-url", file=sys.stderr); return 2
@@ -316,14 +347,18 @@ def main() -> int:
         {"role":"user","content":prompt},
     ]
     print(f"provider={args.provider} base_url={base_url} model={model} cwd={cwd}", file=sys.stderr)
-    requested_reasoning = args.reasoning_effort or "none"
+    requested_reasoning = args.reasoning_effort if args.reasoning_effort is not None else "omitted"
     effective_reasoning = normalize_reasoning_effort(args.reasoning_effort)
-    effective_label = effective_reasoning or "none"
+    effective_label = effective_reasoning if effective_reasoning is not None else "provider_default"
     print(f"chat_reasoning requested={requested_reasoning} effective={effective_label} policy={args.reasoning_policy}", file=sys.stderr)
     turn = 0
     while True:
         turn += 1
-        d = api_call(base_url, key, model, cfg.get("headers", {}), messages, max_tokens=max_tokens, request_timeout=request_timeout, max_retries=max_retries, reasoning_effort=effective_reasoning, reasoning_policy=args.reasoning_policy, tool_policy=args.tool_policy)
+        try:
+            d = api_call(base_url, key, model, cfg.get("headers", {}), messages, max_tokens=max_tokens, request_timeout=request_timeout, max_retries=max_retries, reasoning_effort=effective_reasoning, reasoning_policy=args.reasoning_policy, tool_policy=args.tool_policy)
+        except (ValueError, RuntimeError) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
         ch = d.get("choices", [{}])[0]; msg = ch.get("message", {})
         finish = ch.get("finish_reason")
         raw_content = msg.get("content")

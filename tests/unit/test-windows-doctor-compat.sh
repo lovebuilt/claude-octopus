@@ -207,8 +207,8 @@ else
 fi
 
 test_case "README exposes a working WSL anchor"
-if grep -q '^### Using Cursor on WSL$' "$PROJECT_ROOT/README.md" &&
-   grep -q '\[WSL\](#using-cursor-on-wsl)' "$PROJECT_ROOT/README.md"; then
+if grep -q '^### Using Claude Code from Windows$' "$PROJECT_ROOT/README.md" &&
+   grep -q '#using-claude-code-from-windows)' "$PROJECT_ROOT/README.md"; then
     test_pass
 else
     test_fail "README WSL link does not target a generated heading anchor"

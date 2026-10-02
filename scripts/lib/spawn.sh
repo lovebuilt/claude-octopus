@@ -651,20 +651,16 @@ spawn_agent() {
     enhanced_prompt=$(apply_persona "$role" "$prompt" "false" "${curated_name_early:-}")
 
     # v8.21.0: Check for persona pack override
-    if type get_persona_override &>/dev/null 2>&1 && [[ "${OCTOPUS_PERSONA_PACKS:-auto}" != "off" ]]; then
-        local persona_override_file
-        persona_override_file=$(get_persona_override "${curated_name_early:-${curated_name:-$agent_type}}" 2>/dev/null)
-        if [[ -n "$persona_override_file" && -f "$persona_override_file" ]]; then
-            local pack_persona
-            pack_persona=$(cat "$persona_override_file" 2>/dev/null)
-            if [[ -n "$pack_persona" ]]; then
-                enhanced_prompt="${pack_persona}
+    if type get_persona_override_content &>/dev/null 2>&1 && [[ "${OCTOPUS_PERSONA_PACKS:-auto}" != "off" ]]; then
+        local pack_persona
+        pack_persona=$(get_persona_override_content "${curated_name_early:-${curated_name:-$agent_type}}" 2>/dev/null)
+        if [[ -n "$pack_persona" ]]; then
+            enhanced_prompt="${pack_persona}
 
 ---
 
 ${enhanced_prompt}"
-                log "INFO" "Applied persona pack override from: $persona_override_file"
-            fi
+            log "INFO" "Applied persona pack override for: $agent_type"
         fi
     fi
 
@@ -943,6 +939,7 @@ ${heuristic_ctx}"
     case "$agent_type" in
         codex*) _provider_for_health="codex" ;;
         gemini*|agy*|antigravity) _provider_for_health="agy" ;;
+        anthropic-api*) _provider_for_health="anthropic-api" ;;
         claude-sdk*) _provider_for_health="claude-sdk" ;;
         claude*) _provider_for_health="claude" ;;
         openrouter*) _provider_for_health="openrouter" ;;
@@ -1235,6 +1232,17 @@ ${heuristic_ctx}"
         fi
         echo "# Started: $(date)" >> "$result_file"
         echo "" >> "$result_file"
+        local _untrusted_nonce _nonce_pattern='^[0-9a-f]{32}$'
+        _untrusted_nonce=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || _untrusted_nonce=""
+        if [[ ! "$_untrusted_nonce" =~ $_nonce_pattern ]]; then
+            printf '## Output\n```\n(no provider launched)\n```\n## Status: FAILED (Unable to generate result nonce)\n' >> "$result_file"
+            octo_spawn_contract_finish "$_contract_seat_id" failed "$result_file" "" \
+                "Unable to generate result nonce" 74 "" >/dev/null 2>&1 || true
+            [[ -n "$metrics_id" ]] && record_agent_failure "$metrics_id" 0 \
+                "Unable to generate result nonce" failed 2>/dev/null || true
+            exit 74
+        fi
+        echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
         echo "## Output" >> "$result_file"
         echo '```' >> "$result_file"
 
@@ -1397,6 +1405,9 @@ ${heuristic_ctx}"
             break
         done
 
+        [[ "$boundary_refused" == "true" ]] || \
+            quota_watcher_mark_after_exit "$exit_code" "$temp_errors" "$raw_output" "${_provider_prefix:-}"
+
         if [[ $exit_code -ne 0 && -s "$temp_errors" ]]; then
             local stderr_excerpt=""
             stderr_excerpt=$(grep -m5 '[^[:space:]]' "$temp_errors" 2>/dev/null | tr '\n' ' ' | head -c 600 || true)
@@ -1410,22 +1421,14 @@ ${heuristic_ctx}"
             log "INFO" "Auth retries used: $auth_attempt/$max_auth_retries (backend=$OCTOPUS_BACKEND, exit=$exit_code)"
         fi
 
-        # v8.32: Skip CLI output capture if SubagentStop hook already wrote the result
-        local _hook_captured=false
-        if [[ "$SUPPORTS_HOOK_LAST_MESSAGE" == "true" ]] && grep -q "Capture: SubagentStop hook" "$result_file" 2>/dev/null; then
-            _hook_captured=true
-            log "DEBUG" "Result already captured by SubagentStop hook, skipping CLI output parse"
-        fi
-
         local _octo_success_status="ok"
         local _octo_success_reason=""
         local _octo_tokens_out=0
 
         # v7.19.0 P0.1: Process output regardless of exit code (preserves partial results)
-        if [[ "$_hook_captured" == "true" ]]; then
-            # Hook already wrote ## Output + ## Status: SUCCESS — skip to post-processing
-            _octo_tokens_out=$(octo_estimate_tokens_for_file "$result_file" 2>/dev/null || echo 0)
-        elif [[ $exit_code -eq 0 ]]; then
+        # Agent Teams hooks own native instruction files. This supervised CLI
+        # owns its Output and terminal status even if the prompt quotes a hook.
+        if [[ $exit_code -eq 0 ]]; then
             # Filter out CLI header noise and extract actual response
             # v9.3.1: Check for CLI header separator before filtering — codex exec
             # sends clean response on stdout (no header), banner on stderr.
@@ -1469,20 +1472,13 @@ ${heuristic_ctx}"
                     sed -i.bak '1s/^/<!-- trust=untrusted provider='"$agent_type"' -->\n/' "$result_file" 2>/dev/null || true
                     rm -f "${result_file}.bak"
                 fi
-                # Close the fenced block, then append an END marker (BEGIN goes below)
+                # Close the Output fence and its launcher-written nonce boundary.
                 echo '```' >> "$result_file"
-                local _untrusted_nonce
-                _untrusted_nonce=$(head -c 8 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' 2>/dev/null) \
-                    || _untrusted_nonce="${RANDOM}${RANDOM}${RANDOM}$(date +%s)"
                 echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
-                # Insert the BEGIN marker just above the "## Output" header
-                awk -v marker="<!-- BEGIN-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" '
-                    /^## Output$/ && !done { print marker; done=1 }
-                    { print }
-                ' "$result_file" > "${result_file}.nonce" && mv "${result_file}.nonce" "$result_file"
                 ;;
             *)
                 echo '```' >> "$result_file"
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
                 ;;
             esac
 
@@ -1500,7 +1496,9 @@ ${heuristic_ctx}"
                 if [[ -n "$usage_block" ]]; then
                     echo "" >> "$result_file"
                     echo "## Native Metrics" >> "$result_file"
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=metrics:nonce=${_untrusted_nonce} -->" >> "$result_file"
                     echo "$usage_block" >> "$result_file"
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=metrics:nonce=${_untrusted_nonce} -->" >> "$result_file"
                 fi
             fi
 
@@ -1508,9 +1506,15 @@ ${heuristic_ctx}"
             if [[ -s "$temp_errors" ]] && ! grep -q "^mcp startup:" "$temp_errors"; then
                 echo "" >> "$result_file"
                 echo "## Warnings/Errors" >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
                 echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             octo_append_runtime_identity "$result_file" "$agent_type" "${model:-unresolved}" "$raw_output"
@@ -1579,14 +1583,24 @@ ${heuristic_ctx}"
                 echo "(no output captured before stall detection)" >> "$result_file"
             fi
             echo '```' >> "$result_file"
+            if [[ -n "$_untrusted_nonce" ]]; then
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
+            fi
             echo "" >> "$result_file"
             echo "## Status: STALLED - PARTIAL RESULTS (exit code: 76)" >> "$result_file"
             echo "" >> "$result_file"
             echo "Provider process remained alive but showed no observable output or worktree progress within the configured stall window." >> "$result_file"
             if [[ -s "$temp_errors" ]]; then
-                printf '\n## Error Log\n```\n' >> "$result_file"
+                printf '\n## Error Log\n' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
+                echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             local end_time_ms elapsed_ms tokens_out
@@ -1629,6 +1643,9 @@ ${heuristic_ctx}"
                 echo "(no output captured before timeout)" >> "$result_file"
             fi
             echo '```' >> "$result_file"
+            if [[ -n "$_untrusted_nonce" ]]; then
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
+            fi
             echo "" >> "$result_file"
             echo "## Status: TIMEOUT - PARTIAL RESULTS (exit code: $exit_code)" >> "$result_file"
             echo "" >> "$result_file"
@@ -1647,9 +1664,15 @@ ${heuristic_ctx}"
             if [[ -s "$temp_errors" ]]; then
                 echo "" >> "$result_file"
                 echo "## Error Log" >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
                 echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             # v8.19.0: Record timeout error and save checkpoint
@@ -1699,6 +1722,9 @@ ${heuristic_ctx}"
                 echo "(no output captured — ${agent_type} produced no stdout; check provider auth/config with 'orchestrate.sh doctor')" >> "$result_file"
             fi
             echo '```' >> "$result_file"
+            if [[ -n "$_untrusted_nonce" ]]; then
+                echo "<!-- END-UNTRUSTED:provider=${agent_type}:nonce=${_untrusted_nonce} -->" >> "$result_file"
+            fi
             echo "" >> "$result_file"
             echo "## Status: FAILED (exit code: $exit_code)" >> "$result_file"
 
@@ -1706,9 +1732,15 @@ ${heuristic_ctx}"
             if [[ -s "$temp_errors" ]]; then
                 echo "" >> "$result_file"
                 echo "## Error Log" >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
                 echo '```' >> "$result_file"
                 cat "$temp_errors" >> "$result_file"
                 echo '```' >> "$result_file"
+                if [[ -n "$_untrusted_nonce" ]]; then
+                    echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=stderr:nonce=${_untrusted_nonce} -->" >> "$result_file"
+                fi
             fi
 
             # v8.19.0: Record error for learning loop
@@ -1727,11 +1759,13 @@ ${heuristic_ctx}"
             end_time_ms=$(( $(date +%s) * 1000 ))
             elapsed_ms=$((end_time_ms - start_time_ms))
             update_agent_status "$agent_type" "failed" "$elapsed_ms" "$_estimated_cost" "$_eff_timeout" "$task_id" "${phase:-unknown}" "$result_file"
-            local tokens_out
+            local tokens_out _failure_reason="Exit code $exit_code"
             tokens_out=$(octo_estimate_tokens_for_file "$temp_output" 2>/dev/null || echo 0)
-            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$tokens_out" "Exit code $exit_code" "$elapsed_ms" "$result_file" "${role:-none}" || true
+            declare -F octo_failure_reason >/dev/null 2>&1 && \
+                _failure_reason=$(octo_failure_reason "$exit_code" "$enhanced_prompt" "$temp_errors" "$raw_output")
+            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$tokens_out" "$_failure_reason" "$elapsed_ms" "$result_file" "${role:-none}" || true
             if ! octo_spawn_contract_finish "$_contract_seat_id" failed "$result_file" "$temp_errors" \
-                "Exit code $exit_code" "$exit_code" "$elapsed_ms" >/dev/null 2>&1; then
+                "$_failure_reason" "$exit_code" "$elapsed_ms" >/dev/null 2>&1; then
                 exit_code=74
                 echo "## Contract Status: FAILED (persistence error)" >> "$result_file"
             fi
@@ -1774,9 +1808,11 @@ ${heuristic_ctx}"
             # Result file is suspiciously small but raw output exists - append raw output
             echo "" >> "$result_file"
             echo "## Raw Output (filter may have removed valid content)" >> "$result_file"
+            echo "<!-- BEGIN-UNTRUSTED:provider=${agent_type}:stream=raw:nonce=${_untrusted_nonce} -->" >> "$result_file"
             echo '```' >> "$result_file"
             cat "$raw_output" >> "$result_file"
             echo '```' >> "$result_file"
+            echo "<!-- END-UNTRUSTED:provider=${agent_type}:stream=raw:nonce=${_untrusted_nonce} -->" >> "$result_file"
         fi
 
         # Cleanup temp files (keep raw_output for debugging if result is empty)
