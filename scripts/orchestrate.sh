@@ -2459,15 +2459,7 @@ if [[ "$OCTOPUS_ARTIFACT_READ_ONLY" != "true" && "$COMMAND" != "help" && "$COMMA
 fi
 
 if [[ "${DRY_RUN:-false}" != true && "${1:-}" != --help && "${1:-}" != -h ]]; then
-    case "$COMMAND" in
-        define|grasp|develop|tangle|embrace)
-            feature_workflow_begin "$COMMAND" "${1:-feature}" false || true
-            [[ "${FEATURE_AMBIGUOUS:-false}" != true ]] || exit 1
-            ;;
-        probe|probe-single|discover|research|deliver|ink|review|code-review|council|verify|verification-only)
-            feature_workflow_begin "$COMMAND" feature false || true
-            ;;
-    esac
+    feature_workflow_bind_command "$COMMAND" "${1:-feature}" || exit 1
 fi
 
 case "$COMMAND" in

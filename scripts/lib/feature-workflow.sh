@@ -196,6 +196,19 @@ feature_workflow_gate() {
     return "$rc"
 }
 
+feature_workflow_bind_command() {
+    local command="$1" name="${2:-feature}"
+    case "$command" in
+        define|grasp|develop|tangle|embrace)
+            feature_workflow_begin "$command" "$name" false || true
+            [[ "${FEATURE_AMBIGUOUS:-false}" != true ]] || return 1
+            ;;
+        probe|probe-single|discover|research|deliver|ink|review|code-review|council|verify|verification-only)
+            feature_workflow_begin "$command" feature false || true
+            ;;
+    esac
+}
+
 feature_workflow_refresh_clarifications() {
     local challenge="${1:-}" draft previous collected update
     [[ "${FEATURE_ACTIVE:-false}" == true ]] || return 0
