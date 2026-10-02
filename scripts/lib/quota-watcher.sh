@@ -243,13 +243,14 @@ octo_provider_probe() {
     case "$provider" in
         perplexity)
             [[ -n "${PERPLEXITY_API_KEY:-}" ]] || return 0
-            # Minimal POST: single-token completion to validate the key cheaply.
+            # Minimal POST to the Agent API: one output token and no tool calls
+            # (so no billed web search) to validate the key cheaply.
             http_code=$(curl -s -o /dev/null -w "%{http_code}" \
                 --max-time 10 \
-                -X POST "https://api.perplexity.ai/chat/completions" \
+                -X POST "https://api.perplexity.ai/v1/agent" \
                 -H "Authorization: Bearer ${PERPLEXITY_API_KEY}" \
                 -H "Content-Type: application/json" \
-                -d '{"model":"sonar","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
+                -d '{"preset":"fast","input":"hi","max_output_tokens":1,"max_tool_calls":0}' \
                 2>/dev/null) || curl_exit=$?
             ;;
         openrouter)

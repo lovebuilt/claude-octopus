@@ -347,10 +347,14 @@ orcarouter_execute() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PERPLEXITY SONAR API (v8.24.0 - Issue #22)
+# PERPLEXITY AGENT API (v8.24.0 - Issue #22; Agent API since Sonar retirement)
 # Web-grounded research provider — live internet search with citations
 # Env: PERPLEXITY_API_KEY required
-# Models: sonar-pro (deep research), sonar (fast search)
+# Endpoint: POST https://api.perplexity.ai/v1/agent. Perplexity ended Sonar chat
+#   completions support on 2026-09-27; /chat/completions now answers HTTP 403.
+# Models: sonar-pro, sonar (mapped to Agent API presets per Perplexity's
+#   migration guide), a bare preset (fast|low|medium|high|xhigh), or an explicit
+#   provider/model id such as perplexity/sonar (sent with the web_search tool)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 perplexity_execute() {
@@ -368,9 +372,33 @@ perplexity_execute() {
         return 1
     fi
 
-    [[ "$VERBOSE" == "true" ]] && log DEBUG "Perplexity Sonar request: model=$model" || true
+    # Map the configured model onto an Agent API request target. Legacy Sonar ids
+    # take the presets Perplexity's migration guide recommends (sonar and
+    # sonar-pro -> fast, sonar-reasoning-pro -> low, sonar-deep-research -> high).
+    # An explicit provider/model id is sent as "model" together with the
+    # web_search tool, because direct-model requests only search when the tool is
+    # present; presets carry their own tools.
+    local target_field target_value tools_json=""
+    case "$model" in
+        sonar|sonar-pro)            target_field="preset"; target_value="fast" ;;
+        sonar-reasoning-pro)        target_field="preset"; target_value="low" ;;
+        sonar-deep-research)        target_field="preset"; target_value="high" ;;
+        fast|low|medium|high|xhigh) target_field="preset"; target_value="$model" ;;
+        *)
+            if [[ "$model" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._:-]+$ ]]; then
+                target_field="model"; target_value="$model"
+                tools_json=',
+  "tools": [{"type": "web_search"}]'
+            else
+                log ERROR "Perplexity: model '$model' has no Agent API mapping (use sonar, sonar-pro, a preset such as fast, or a provider/model id)"
+                return 1
+            fi
+            ;;
+    esac
 
-    # Build JSON payload — Perplexity uses OpenAI-compatible chat completions API
+    [[ "$VERBOSE" == "true" ]] && log DEBUG "Perplexity Agent API request: model=$model ${target_field}=${target_value}" || true
+
+    # Build JSON payload for the Agent API (input + instructions replace messages)
     local escaped_prompt
     escaped_prompt=$(json_escape "$prompt")
 
@@ -383,12 +411,10 @@ perplexity_execute() {
     local payload
     payload=$(cat << EOF
 {
-  "model": "$model",
-  "messages": [
-    {"role": "system", "content": "You are a research assistant with live web access. Provide detailed, factual answers with citations. Always include source URLs when referencing specific information."},
-    {"role": "user", "content": "$escaped_prompt"}
-  ],
-  "max_tokens": ${max_tokens}
+  "${target_field}": "${target_value}",
+  "instructions": "You are a research assistant with live web access. Provide detailed, factual answers with citations. Always include source URLs when referencing specific information.",
+  "input": "$escaped_prompt",
+  "max_output_tokens": ${max_tokens}${tools_json}
 }
 EOF
 )
@@ -398,7 +424,7 @@ EOF
     # captures them; --max-time bounds hung connections. A failed or empty
     # request previously fell through silently and produced an empty result
     # file with "(no output captured)" and no actionable error (bug 260609).
-    response=$(curl -sS --max-time "${OCTOPUS_PERPLEXITY_TIMEOUT:-120}" -X POST "https://api.perplexity.ai/chat/completions" \
+    response=$(curl -sS --max-time "${OCTOPUS_PERPLEXITY_TIMEOUT:-120}" -X POST "https://api.perplexity.ai/v1/agent" \
         -H "Authorization: Bearer ${PERPLEXITY_API_KEY}" \
         -H "Content-Type: application/json" \
         -H "Connection: keep-alive" \
@@ -412,17 +438,25 @@ EOF
         return 1
     fi
 
-    # Extract content from OpenAI-compatible nested path .choices[0].message.content.
-    # See openrouter_execute_model above — same bug, same fix (issue #307).
+    # Extract the answer from the Agent API's typed output array: every
+    # output_text part of every message item (Agent API replies carry no
+    # top-level text field in the raw JSON).
     local content=""
     if command -v jq &>/dev/null; then
-        content=$(printf '%s' "$response" | jq -re '.choices[0].message.content // empty' 2>/dev/null) || content=""
+        content=$(printf '%s' "$response" | jq -re '[.output[]? | select(.type == "message") | .content[]? | select(.type == "output_text") | .text // empty] | join("\n\n") | select(length > 0)' 2>/dev/null) || content=""
     fi
 
-    # Extract citations if available (Perplexity-specific field)
+    # Citations: url_citation annotations on the answer text when present,
+    # otherwise the URLs of the search_results output item (what Sonar's
+    # top-level "citations" array used to carry). De-duplicated, order kept.
     local citations=""
     if command -v jq &>/dev/null; then
-        citations=$(echo "$response" | jq -r '.citations // [] | to_entries[] | "[\(.key + 1)] \(.value)"' 2>/dev/null) || true
+        citations=$(printf '%s' "$response" | jq -r '
+            [.output[]? | select(.type == "message") | .content[]? | .annotations[]? | select(.type == "url_citation") | .url] as $cited
+            | (if ($cited | length) > 0 then $cited else [.output[]? | select(.type == "search_results") | .results[]? | .url] end)
+            | map(select(type == "string" and length > 0))
+            | reduce .[] as $u ([]; if any(.[]; . == $u) then . else . + [$u] end)
+            | to_entries[] | "[\(.key + 1)] \(.value)"' 2>/dev/null) || true
     fi
 
     if [[ -z "$content" ]]; then
