@@ -113,6 +113,95 @@ class Artifacts(unittest.TestCase):
             self.assertNotIn(str(self.draft), text)
             self.assertIn('run-123', text)
 
+    def test_publication_preserves_authentication_and_credential_policy_prose(self):
+        feature = self.allocate()['feature']
+        phrases = ('Basic authentication', 'basic usage', 'the bearer of the token',
+                   'Password: must contain 12 characters', 'Password: 12 characters',
+                   'secret = rotated monthly')
+        for kind, phrase in ((kind, phrase) for kind in
+                             ('spec', 'plan', 'tasks', 'research', 'decisions')
+                             for phrase in phrases):
+            with self.subTest(kind=kind, phrase=phrase):
+                prose = phrase + '\n'
+                self.draft.write_text(prose)
+                value = self.call('publish', '--feature', feature, '--kind', kind,
+                                  '--input', str(self.draft), '--provider', 'codex',
+                                  '--run-id', 'prose-fixture', '--distilled')
+                self.assertFalse(value['withheld'])
+                self.assertIn(prose, (self.root / value['path']).read_text())
+
+    def test_scanner_prose_and_credentials_use_both_modes(self):
+        cases = [
+            ('Basic authentication\nbasic usage\nthe bearer of the token\n', 0, 0),
+            ('Password: must contain 12 characters\nPassword: 12 characters\nsecret = rotated monthly\n', 0, 0),
+            ('password: unknown-inert-value', 65, 0),
+            ('secret = unknown inert words', 65, 0),
+            ('token = unknown-inert-value', 65, 0),
+            ('service_password=unknown-inert-value', 65, 0),
+            ('password: "must contain 12 characters"', 65, 0),
+            ('"password": "12 characters"', 65, 0),
+            ('secret = rotated monthly-extra', 65, 0),
+            ('config.secret = rotated monthly', 65, 0),
+            ('PASSWORD=must contain 12 characters', 65, 0),
+            ('API_KEY=${API_KEY}\npassword=[REDACTED]\n', 0, 0),
+            ('authorization: bearer short', 65, 65),
+            ('authorization: basic dXNlcjpwYXNz==', 65, 65),
+            ('Authorization: Basic authentication', 65, 65),
+            ('"authorization": "basic usage"', 65, 65),
+            ('bearer short', 65, 0),
+            ('basic dXNlcjpwYXNz==', 65, 0),
+            ('OPENAI_API_KEY=sk-proj-' + 'a' * 20, 65, 65),
+            ('-----BEGIN PRIVATE KEY-----\ninert\n-----END PRIVATE KEY-----', 65, 65),
+            ('eyJ' + 'a' * 10 + '.' + 'b' * 10 + '.' + 'c' * 10, 65, 65),
+            ('https://user:unknown-inert-value@example.test', 65, 65),
+        ]
+        for text, full, recognizable in cases:
+            for args, expected in (([], full), (['--recognizable-only'], recognizable)):
+                with self.subTest(text=text, args=args):
+                    result = subprocess.run([sys.executable, str(SAFETY), *args],
+                                            input=text, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, expected)
+                    self.assertEqual(result.stdout, '')
+                    self.assertEqual(result.stderr, '')
+
+    def test_publication_retains_lowercase_credential_safety(self):
+        feature = self.allocate()['feature']
+        for credential in ('password=unknown-inert-value', 'secret = unknown inert words',
+                           'token=unknown-inert-value', 'service_password=unknown-inert-value'):
+            with self.subTest(credential=credential):
+                self.draft.write_text(credential)
+                value = self.call('publish', '--feature', feature, '--kind', 'spec',
+                                  '--input', str(self.draft))
+                self.assertTrue(value['withheld'])
+                self.assertNotIn(credential.split('=', 1)[-1], (self.root / value['path']).read_text())
+        for credential in ('authorization: bearer short', 'authorization: basic dXNlcjpwYXNz==',
+                           'Authorization: Basic authentication', '"authorization": "basic usage"',
+                           'bearer short', 'basic dXNlcjpwYXNz=='):
+            with self.subTest(credential=credential):
+                self.draft.write_text(credential)
+                value = self.call('publish', '--feature', feature, '--kind', 'spec',
+                                  '--input', str(self.draft))
+                self.assertFalse(value['withheld'])
+                self.assertIn('[REDACTED-AUTHORIZATION]', (self.root / value['path']).read_text())
+                self.assertNotIn(credential, (self.root / value['path']).read_text())
+
+    def test_publication_redacts_each_recognizable_credential(self):
+        feature = self.allocate()['feature']
+        credentials = ('sk-proj-' + 'a' * 20,
+                       '-----BEGIN PRIVATE KEY-----\ninert fixture\n-----END PRIVATE KEY-----',
+                       'eyJ' + 'a' * 10 + '.' + 'b' * 10 + '.' + 'c' * 10,
+                       'https://user:unknown-inert-value@example.test')
+        for credential in credentials:
+            with self.subTest(credential=credential):
+                self.draft.write_text('Accepted synthesis.\n' + credential + '\n')
+                value = self.call('publish', '--feature', feature, '--kind', 'spec',
+                                  '--input', str(self.draft))
+                self.assertFalse(value['withheld'])
+                published = (self.root / value['path']).read_text()
+                self.assertNotIn(credential, published)
+                self.assertIn('Accepted synthesis.', published)
+                self.assertIn('[REDACTED-', published)
+
     def test_redaction_and_research_attribution(self):
         feature = self.allocate()['feature']
         self.draft.write_text('Accepted synthesis.\n-----BEGIN PRIVATE KEY-----\ninert fixture\n-----END PRIVATE KEY-----\nBearer inert-fixture\n')
