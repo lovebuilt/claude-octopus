@@ -233,7 +233,7 @@ feature_workflow_preimplement() {
         feature_workflow_gate develop
         return $?
     fi
-    feature_workflow_refresh_clarifications || true
+    feature_workflow_refresh_clarifications "" || true
     if [[ -f "${_octo_feature_lib}/feature-analysis-runtime.sh" ]]; then
         source "${_octo_feature_lib}/feature-analysis-runtime.sh"
         feature_analysis_preimplement || true

@@ -95,7 +95,7 @@ _feature_tasks_resume() {
 }
 
 _feature_tasks_agent() {
-    local kind="$1" profile= coding_role= default=
+    local kind="$1" profile='' coding_role='' default=''
     if [[ "$kind" == "reasoning" ]]; then
         profile=reasoning; coding_role=researcher; default=agy
     else
