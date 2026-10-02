@@ -162,8 +162,11 @@ Incorporate the user's answers from Step 1 into the probe query to focus the res
 ```bash
 # Select the accepted output from this exact run, never a recent-file search.
 RESEARCH_RECEIPT="$FEATURE_RUNTIME_DIR/last-research.json"
-jq -e --arg run "$SPEC_RESEARCH_RUN" '.run_id == $run and .degraded == false' "$RESEARCH_RECEIPT" >/dev/null
-SYNTHESIS_FILE=$(jq -r '.result' "$RESEARCH_RECEIPT")
+if ! jq -e --arg run "$SPEC_RESEARCH_RUN" '.run_id == $run and .degraded == false' "$RESEARCH_RECEIPT" >/dev/null; then
+  echo "No accepted synthesis for this spec run"
+  exit 1
+fi
+SYNTHESIS_FILE=$(jq -er '.result | select(type == "string" and length > 0)' "$RESEARCH_RECEIPT") || exit 1
 [[ -f "$SYNTHESIS_FILE" ]] || { echo "No accepted synthesis for this spec run"; exit 1; }
 cat "$SYNTHESIS_FILE"
 # research.md is already published through the redaction and safety gate.
@@ -261,18 +264,27 @@ Stage the spec draft in `$FEATURE_RUNTIME_DIR/spec-draft.md`. Select an availabl
 challenge_task="challenge-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 challenge_dir="$FEATURE_RUNTIME_DIR/challenge-results"
 mkdir -p "$challenge_dir"
-# review_provider is the chosen independent provider, such as codex or agy.
-OCTOPUS_FEATURE="$FEATURE_SELECTOR" FEATURE_RUNTIME_DIR="$FEATURE_RUNTIME_DIR" \
-bash "$OCTO_ROOT/scripts/orchestrate.sh" probe-single "$review_provider" \
-  "Challenge this specification. Find missing requirements, constraints, edge cases and vague acceptance conditions. Emit user-owned decisions as inline NEEDS CLARIFICATION markers and an octopus-clarifications JSON array with kind user_decision, category scope|constraints|policy|acceptance, stable identity, question, requirements, task_ids, phases and any load-bearing blocking reason. Technical uncertainty belongs in research. SPECIFICATION: $(cat "$FEATURE_RUNTIME_DIR/spec-draft.md")" \
-  "$challenge_task" "<project request>" --output-dir "$challenge_dir"
-challenge_result="$challenge_dir/${review_provider}-${challenge_task}.md"
-source "$OCTO_ROOT/scripts/lib/result-file.sh"
-if [[ "$(octo_result_launcher_status "$challenge_result")" == SUCCESS ]]; then
-  octo_result_framed_sections "$challenge_result" output > "$FEATURE_RUNTIME_DIR/challenge-answer.md"
+review_provider=""
+if command -v codex >/dev/null 2>&1; then
+  review_provider="codex"
+elif command -v agy >/dev/null 2>&1; then
+  review_provider="agy"
+fi
+: > "$FEATURE_RUNTIME_DIR/challenge-answer.md"
+if [[ -n "$review_provider" ]]; then
+  challenge_result="$challenge_dir/${review_provider}-${challenge_task}.md"
+  source "$OCTO_ROOT/scripts/lib/result-file.sh"
+  if OCTOPUS_FEATURE="$FEATURE_SELECTOR" FEATURE_RUNTIME_DIR="$FEATURE_RUNTIME_DIR" \
+    bash "$OCTO_ROOT/scripts/orchestrate.sh" probe-single "$review_provider" \
+    "Challenge this specification. Find missing requirements, constraints, edge cases and vague acceptance conditions. Emit user-owned decisions as inline NEEDS CLARIFICATION markers and an octopus-clarifications JSON array with kind user_decision, category scope|constraints|policy|acceptance, stable identity, question, requirements, task_ids, phases and any load-bearing blocking reason. Technical uncertainty belongs in research. SPECIFICATION: $(cat "$FEATURE_RUNTIME_DIR/spec-draft.md")" \
+    "$challenge_task" "<project request>" --output-dir "$challenge_dir" && \
+    [[ "$(octo_result_launcher_status "$challenge_result")" == SUCCESS ]]; then
+    octo_result_framed_sections "$challenge_result" output > "$FEATURE_RUNTIME_DIR/challenge-answer.md"
+  else
+    echo "Challenge unavailable; keep the draft and open decisions"
+  fi
 else
-  echo "Challenge unavailable; keep the draft and open decisions"
-  : > "$FEATURE_RUNTIME_DIR/challenge-answer.md"
+  echo "No external challenge provider; use the Sonnet challenge below"
 fi
 ```
 

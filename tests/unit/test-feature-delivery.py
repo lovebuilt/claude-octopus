@@ -390,5 +390,85 @@ Given saved data, when export starts, then an export and index exist.
         self.assertIn('- [x] T002', (self.feature / 'tasks.md').read_text())
 
 
+
+class SpecInstructionAcceptance(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.runtime = self.root / 'runtime'
+        self.runtime.mkdir()
+        self.text = (REPO / '.claude/skills/flow-spec/SKILL.md').read_text()
+
+    def snippet(self, step):
+        section = self.text.split('### STEP ' + step + ':', 1)[1]
+        return section.split('```bash\n', 1)[1].split('```', 1)[0]
+
+    def execute(self, code, prefix=''):
+        env = dict(os.environ, FEATURE_RUNTIME_DIR=str(self.runtime),
+                   SPEC_RESEARCH_RUN='current-spec-run', OCTO_ROOT=str(self.root / 'plugin'),
+                   FEATURE_SELECTOR='specs/001-example')
+        return subprocess.run(['bash', '-c', prefix + '\n' + code], env=env,
+                              capture_output=True, text=True, timeout=10)
+
+    def test_receipt_rejects_other_runs_degraded_missing_and_invalid_results(self):
+        result = self.root / 'accepted.md'
+        result.write_text('CURRENT ACCEPTED RESEARCH\n')
+        receipt = self.runtime / 'last-research.json'
+        code = self.snippet('5')
+        for fields in [dict(run_id='old-spec-run', degraded=False, result=str(result)),
+                       dict(run_id='current-spec-run', degraded=True, result=str(result)),
+                       dict(run_id='current-spec-run', degraded=False, result=None),
+                       dict(run_id='current-spec-run', degraded=False, result='')]:
+            with self.subTest(fields=fields):
+                receipt.write_text(json.dumps(fields))
+                ran = self.execute(code)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertNotIn('CURRENT ACCEPTED RESEARCH', ran.stdout)
+        receipt.unlink()
+        self.assertNotEqual(self.execute(code).returncode, 0)
+        receipt.write_text(json.dumps(dict(run_id='current-spec-run', degraded=False, result=str(result))))
+        ran = self.execute(code)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn('CURRENT ACCEPTED RESEARCH', ran.stdout)
+
+    def test_no_external_provider_skips_dispatch_and_keeps_empty_answer(self):
+        code = self.snippet('6.5')
+        prefix = 'command() { if [[ "$1" == -v && ( "$2" == codex || "$2" == agy ) ]]; then return 1; fi; builtin command "$@"; }'
+        ran = self.execute(code, prefix)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn('No external challenge provider', ran.stdout)
+        self.assertEqual((self.runtime / 'challenge-answer.md').read_text(), '')
+
+    def test_available_provider_uses_exact_result_and_failure_remains_optional(self):
+        plugin = self.root / 'plugin'
+        (plugin / 'scripts/lib').mkdir(parents=True)
+        (plugin / 'scripts/orchestrate.sh').write_text('printf "%s\\n" "$2" > "$FEATURE_RUNTIME_DIR/dispatched-provider"\nexit 1\n')
+        (plugin / 'scripts/lib/result-file.sh').write_text('octo_result_launcher_status() { printf "FAILED\\n"; }\n')
+        (self.runtime / 'spec-draft.md').write_text('Draft spec')
+        code = self.snippet('6.5')
+        for provider in ['codex', 'agy']:
+            with self.subTest(provider=provider):
+                prefix = 'command() { if [[ "$1" == -v && ( "$2" == codex || "$2" == agy ) ]]; then [[ "$2" == ' + provider + ' ]]; return; fi; builtin command "$@"; }'
+                ran = self.execute(code, 'set -e\n' + prefix)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertEqual((self.runtime / 'dispatched-provider').read_text().strip(), provider)
+                self.assertEqual((self.runtime / 'challenge-answer.md').read_text(), '')
+
+    def test_success_reads_only_the_selected_challenge_artifact(self):
+        plugin = self.root / 'plugin'
+        (plugin / 'scripts/lib').mkdir(parents=True)
+        (plugin / 'scripts/orchestrate.sh').write_text('printf "SELECTED CHALLENGE\\n" > "$7/$2-$4.md"\n')
+        (plugin / 'scripts/lib/result-file.sh').write_text(
+            'octo_result_launcher_status() { [[ -f "$1" ]] && printf "SUCCESS\\n"; }\n'
+            'octo_result_framed_sections() { cat "$1"; }\n')
+        (self.runtime / 'spec-draft.md').write_text('Draft spec')
+        (self.runtime / 'challenge-results').mkdir()
+        (self.runtime / 'challenge-results/decoy.md').write_text('DECOY')
+        prefix = 'command() { if [[ "$1" == -v && "$2" == codex ]]; then return 0; fi; builtin command "$@"; }'
+        ran = self.execute(self.snippet('6.5'), 'set -e\n' + prefix)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual((self.runtime / 'challenge-answer.md').read_text(), 'SELECTED CHALLENGE\n')
+
 if __name__ == '__main__':
     unittest.main()
