@@ -270,18 +270,23 @@ For an unresolved decision that belongs to the user, emit `[NEEDS CLARIFICATION:
 
 **After generating the NLSpec draft but BEFORE validation, challenge its completeness using a different provider.** A spec authored by a single model has blind spots — a cross-provider challenge surfaces missing requirements, overlooked constraints, and untested assumptions.
 
-Stage the spec draft in `$FEATURE_RUNTIME_DIR/spec-draft.md`. Select an available provider that did not author it. Run the challenge synchronously and read its exact completed artifact:
+Stage the spec draft in `$FEATURE_RUNTIME_DIR/spec-draft.md`. Set `SPEC_AUTHOR_PROVIDER` to the actual draft author's provider, such as `claude`, `codex` or `agy`. Use the active host's identity, including Codex for the generated Codex skill. The selection below excludes that provider. An unknown author skips external dispatch. Run the challenge synchronously and read its exact completed artifact:
 
 ```bash
 challenge_task="challenge-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 challenge_dir="$FEATURE_RUNTIME_DIR/challenge-results"
 mkdir -p "$challenge_dir"
 review_provider=""
-if command -v codex >/dev/null 2>&1; then
-  review_provider="codex"
-elif command -v agy >/dev/null 2>&1; then
-  review_provider="agy"
-fi
+case "${SPEC_AUTHOR_PROVIDER:-}" in
+  claude|claude-sdk|anthropic-api|codex|agy)
+    if [[ "$SPEC_AUTHOR_PROVIDER" != codex ]] && command -v codex >/dev/null 2>&1; then
+      review_provider="codex"
+    elif [[ "$SPEC_AUTHOR_PROVIDER" != agy ]] && command -v agy >/dev/null 2>&1; then
+      review_provider="agy"
+    fi
+    ;;
+  *) echo "Spec author unknown; skip external challenge dispatch" ;;
+esac
 : > "$FEATURE_RUNTIME_DIR/challenge-answer.md"
 if [[ -n "$review_provider" ]]; then
   challenge_result="$challenge_dir/${review_provider}-${challenge_task}.md"
@@ -290,7 +295,7 @@ if [[ -n "$review_provider" ]]; then
     bash "$OCTO_ROOT/scripts/orchestrate.sh" probe-single "$review_provider" \
     "Challenge this specification. Find missing requirements, constraints, edge cases and vague acceptance conditions. Emit user-owned decisions as inline NEEDS CLARIFICATION markers and an octopus-clarifications JSON array with kind user_decision, category scope|constraints|policy|acceptance, stable identity, question, requirements, task_ids, phases and any load-bearing blocking reason. Technical uncertainty belongs in research. SPECIFICATION: $(cat "$FEATURE_RUNTIME_DIR/spec-draft.md")" \
     "$challenge_task" "<project request>" --output-dir "$challenge_dir" && \
-    [[ "$(octo_result_launcher_status "$challenge_result")" == SUCCESS ]]; then
+    [[ "$(octo_result_launcher_status "$challenge_result")" == "## Status: SUCCESS"* ]]; then
     octo_result_framed_sections "$challenge_result" output > "$FEATURE_RUNTIME_DIR/challenge-answer.md"
   else
     echo "Challenge unavailable; keep the draft and open decisions"

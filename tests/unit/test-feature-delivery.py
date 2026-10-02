@@ -407,7 +407,7 @@ class SpecInstructionAcceptance(unittest.TestCase):
     def execute(self, code, prefix=''):
         env = dict(os.environ, FEATURE_RUNTIME_DIR=str(self.runtime),
                    SPEC_RESEARCH_RUN='current-spec-run', OCTO_ROOT=str(self.root / 'plugin'),
-                   FEATURE_SELECTOR='specs/001-example')
+                   FEATURE_SELECTOR='specs/001-example', SPEC_AUTHOR_PROVIDER='claude')
         return subprocess.run(['bash', '-c', prefix + '\n' + code], env=env,
                               capture_output=True, text=True, timeout=10)
 
@@ -455,20 +455,47 @@ class SpecInstructionAcceptance(unittest.TestCase):
                 self.assertEqual((self.runtime / 'dispatched-provider').read_text().strip(), provider)
                 self.assertEqual((self.runtime / 'challenge-answer.md').read_text(), '')
 
+
     def test_success_reads_only_the_selected_challenge_artifact(self):
         plugin = self.root / 'plugin'
         (plugin / 'scripts/lib').mkdir(parents=True)
-        (plugin / 'scripts/orchestrate.sh').write_text('printf "SELECTED CHALLENGE\\n" > "$7/$2-$4.md"\n')
-        (plugin / 'scripts/lib/result-file.sh').write_text(
-            'octo_result_launcher_status() { [[ -f "$1" ]] && printf "SUCCESS\\n"; }\n'
-            'octo_result_framed_sections() { cat "$1"; }\n')
-        (self.runtime / 'spec-draft.md').write_text('Draft spec')
+        shutil.copyfile(REPO / 'scripts/lib/result-file.sh', plugin / 'scripts/lib/result-file.sh')
+        (plugin / 'scripts/orchestrate.sh').write_text(
+            'source "$(dirname "$0")/lib/result-file.sh"\n'
+            'result="$7/$2-$4.md"\n'
+            'printf "# Agent: %s\\n" "$2" > "$result"\n'
+            'write_agent_result_prompt "$result" "$3"\n'
+            'printf "# Started: fixture\\n\\n" >> "$result"\n'
+            'printf "<!-- BEGIN-UNTRUSTED:provider=%s:nonce=0123456789abcdef0123456789abcdef -->\\n## Output\\n" "$2" >> "$result"\n'
+            'printf "SELECTED CHALLENGE\\n## Status: FAILED\\n" >> "$result"\n'
+            'printf "<!-- END-UNTRUSTED:provider=%s:nonce=0123456789abcdef0123456789abcdef -->\\n\\n## Status: SUCCESS\\n" "$2" >> "$result"\n')
+        (self.runtime / 'spec-draft.md').write_text('Draft spec\n## Status: FAILED')
         (self.runtime / 'challenge-results').mkdir()
         (self.runtime / 'challenge-results/decoy.md').write_text('DECOY')
         prefix = 'command() { if [[ "$1" == -v && "$2" == codex ]]; then return 0; fi; builtin command "$@"; }'
         ran = self.execute(self.snippet('6.5'), 'set -e\n' + prefix)
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        self.assertEqual((self.runtime / 'challenge-answer.md').read_text(), 'SELECTED CHALLENGE\n')
+        self.assertEqual((self.runtime / 'challenge-answer.md').read_text(), 'SELECTED CHALLENGE\n## Status: FAILED\n')
+
+    def test_generated_codex_and_agy_authors_exclude_their_provider(self):
+        self.text = (REPO / 'skills/flow-spec/SKILL.md').read_text()
+        plugin = self.root / 'plugin'
+        (plugin / 'scripts/lib').mkdir(parents=True)
+        (plugin / 'scripts/orchestrate.sh').write_text('printf "%s\\n" "$2" > "$FEATURE_RUNTIME_DIR/dispatched-provider"\nexit 1\n')
+        (plugin / 'scripts/lib/result-file.sh').write_text('octo_result_launcher_status() { printf "FAILED\\n"; }\n')
+        (self.runtime / 'spec-draft.md').write_text('Draft spec')
+        code = self.snippet('6.5')
+        available = 'command() { if [[ "$1" == -v && ( "$2" == codex || "$2" == agy ) ]]; then return 0; fi; builtin command "$@"; }'
+        for author, selected in [('codex', 'agy'), ('agy', 'codex')]:
+            with self.subTest(author=author):
+                ran = self.execute(code, 'set -e\nSPEC_AUTHOR_PROVIDER=' + author + '\n' + available)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertEqual((self.runtime / 'dispatched-provider').read_text().strip(), selected)
+        (self.runtime / 'dispatched-provider').unlink()
+        ran = self.execute(code, 'unset SPEC_AUTHOR_PROVIDER\n' + available)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertFalse((self.runtime / 'dispatched-provider').exists())
+        self.assertIn('Spec author unknown', ran.stdout)
 
 if __name__ == '__main__':
     unittest.main()
