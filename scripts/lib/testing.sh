@@ -37,6 +37,30 @@ extract_tangle_result_body() {
     fi
 }
 
+# Evidence for the anti-sycophancy challenge, which is told not to open files: the changed
+# paths, the start of each changed file (only regular files inside the repository; symlinks
+# and paths that leave it are listed but not read), and the end of the providers' own reports.
+# The raw result files start with a long header and the prompt preamble, so their first bytes
+# never contain the change.
+tangle_challenge_evidence() {
+    local changes="${1:-}" outputs="${2:-}"
+    local repo_root budget=6000 path real content
+    repo_root=$(git -C "${PROJECT_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || repo_root="${PROJECT_ROOT:-$PWD}"
+    repo_root=$(cd "$repo_root" 2>/dev/null && pwd -P) || repo_root=""
+    printf 'Changed files:\n%s\n\n' "${changes:-(none recorded)}"
+    while IFS= read -r path; do
+        [[ -n "$path" && -n "$repo_root" && "$budget" -gt 0 ]] || continue
+        [[ "$path" != /* && "$path" != *..* ]] || continue
+        [[ -f "$repo_root/$path" && ! -L "$repo_root/$path" ]] || continue
+        real=$(cd "$(dirname "$repo_root/$path")" 2>/dev/null && pwd -P) || continue
+        case "$real/" in "$repo_root/"*) ;; *) continue ;; esac
+        content=$(head -c 1500 "$repo_root/$path" 2>/dev/null) || continue
+        printf '=== %s (first %s bytes) ===\n%s\n\n' "$path" "${#content}" "$content"
+        budget=$((budget - ${#content}))
+    done <<< "$changes"
+    printf 'Provider reports (last 3000 bytes):\n%s\n' "$(tail -c 3000 <<< "$outputs")"
+}
+
 tangle_result_has_blocker_output() {
     local result_file="$1"
     local output
@@ -788,7 +812,7 @@ Do NOT invent problems that don't exist — but be genuinely critical.
 Original task: ${original_prompt}
 
 Results to challenge:
-$(head -c 3000 <<< "$results")
+$(tangle_challenge_evidence "$worktree_changes" "$result_outputs")
 " 60 "code-reviewer" "quality-gate") || true
 
             if [[ -n "$challenge_result" ]] && ! echo "$challenge_result" | grep -Fc "$clean_token" >/dev/null 2>&1; then
