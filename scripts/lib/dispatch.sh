@@ -309,6 +309,29 @@ octo_kimi_role_is_write_capable() {
     esac
 }
 
+# OpenCode 1.x takes the global --pure flag; 2.x rejects it. Ask the installed
+# CLI once per shell. OCTOPUS_OPENCODE_PURE=1|0 overrides the probe.
+octopus_opencode_supports_pure() {
+    case "${OCTOPUS_OPENCODE_PURE:-}" in
+        1|true|yes) return 0 ;;
+        0|false|no) return 1 ;;
+    esac
+    if [[ -z "${_OCTOPUS_OPENCODE_PURE_PROBE:-}" ]]; then
+        local help_text=""
+        if command -v timeout >/dev/null 2>&1; then
+            help_text=$(timeout 10 opencode --help 2>&1) || true
+        else
+            help_text=$(opencode --help 2>&1) || true
+        fi
+        if [[ "$help_text" == *"--pure"* ]]; then
+            _OCTOPUS_OPENCODE_PURE_PROBE=yes
+        else
+            _OCTOPUS_OPENCODE_PURE_PROBE=no
+        fi
+    fi
+    [[ "$_OCTOPUS_OPENCODE_PURE_PROBE" == yes ]]
+}
+
 get_agent_command() {
     local agent_type="$1"
     local phase="${2:-}"
@@ -845,8 +868,14 @@ get_agent_command() {
             # before the prompt is even sent — an unresolvable catalog/model
             # there hangs `opencode run` indefinitely with no timeout or error
             # (Issue #566). It's a global flag, so it must precede the `run`
-            # subcommand or risk being ignored/rejected.
-            echo "opencode --pure run ${oc_model_flag}"
+            # subcommand or risk being ignored/rejected. OpenCode 2.x removed
+            # it and rejects it ("Unrecognized flag: --pure"), so pass it only
+            # when the installed CLI still lists it.
+            if octopus_opencode_supports_pure; then
+                echo "opencode --pure run ${oc_model_flag}"
+            else
+                echo "opencode run ${oc_model_flag}"
+            fi
             ;;
         *) return 1 ;;
     esac
