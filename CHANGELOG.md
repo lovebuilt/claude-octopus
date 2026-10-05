@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The Discover, Define, Develop and Deliver skills called `octo-state.sh
+  update_state`, `get_phase_status` and `update_roadmap`, which the dispatcher
+  did not have, so each state step printed "Unknown command". `update_state`
+  is now `write_state` under that name and takes `--history`.
+  `get_phase_status` reports the current status for the current phase, else
+  the newest history record for that phase, else `pending`; it never infers
+  completion from phase order. `update_roadmap` records the synthesis file
+  inside `## Definitions` in ROADMAP.md.
+- History records now carry the status in a fixed slot,
+  `- [time] Phase N (status): position`, and `get_phase_status` reads it only
+  there, so text in a position or a note cannot stand in for it. Records in
+  the older `Phase N: position (status)` form are not read; the phase reads
+  `pending` with a warning until it is recorded again.
+- `write_state` refuses to write when STATE.md is missing, or repeats, its
+  `Current Phase`, `Current Position` or `Status` line, instead of filling in
+  a default. Newlines in `--position`, `--blocker` and `--history` are folded
+  onto one line, and a flag without a value is an error.
+- Define, Develop and Deliver touch `.octo/` only when
+  `OCTOPUS_PROJECT_PERSISTENCE=true`, as Discover does, and stop when a state
+  write fails. Their previous-phase check accepts `complete_with_gaps` and
+  `shipped`.
+
 ## [11.10.0] - 2026-10-02
 
 ### Added

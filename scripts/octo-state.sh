@@ -93,6 +93,38 @@ get_timestamp() {
     date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
 
+# Fold a free-text value onto one line. STATE.md keeps one record per line, so a
+# newline in a position, blocker or history note would split a record and could
+# forge another one.
+single_line() {
+    local value="$1"
+    value="${value//$'\r'/ }"
+    printf '%s' "${value//$'\n'/ }"
+}
+
+# Print the value of the first "**<label>:** value" line in STATE.md, or nothing.
+# awk reads the whole file itself: a grep | sed | head pipeline under pipefail
+# exits silently when the line is missing, and can fail on SIGPIPE when it is not.
+state_field() {
+    [[ -f "$STATE_FILE" ]] || return 0
+    awk -v label="**$1:** " 'index($0, label) == 1 { print substr($0, length(label) + 1); exit }' "$STATE_FILE"
+}
+
+# write_state rewrites STATE.md from its header lines. Refuse to write when one is
+# missing or repeated: filling in a default would overwrite the recorded phase or
+# status with a guess, and a repeated line means the file was damaged or edited.
+require_state_fields() {
+    local label count
+    for label in "Current Phase" "Current Position" "Status"; do
+        count=$(awk -v label="**$label:** " 'index($0, label) == 1 { n++ } END { print n + 0 }' "$STATE_FILE")
+        if [[ "$count" -eq 0 ]]; then
+            error "STATE.md has no '**$label:**' line; nothing was written: $STATE_FILE"
+        elif [[ "$count" -gt 1 ]]; then
+            error "STATE.md has $count '**$label:**' lines; nothing was written: $STATE_FILE"
+        fi
+    done
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ATOMIC WRITE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -139,7 +171,7 @@ generate_state_template() {
 
 ## History
 
-- [$timestamp] Phase 1: Project initialized (ready)
+- [$timestamp] Phase 1 (ready): Project initialized
 EOF
 }
 
@@ -448,16 +480,22 @@ write_state() {
     local position=""
     local status=""
     local blocker=""
+    local history_note=""
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --phase|--position|--status|--blocker|--history)
+                [[ $# -ge 2 ]] || error "$1 requires a value"
+                ;;
+        esac
         case "$1" in
             --phase)
                 phase="$2"
                 shift 2
                 ;;
             --position)
-                position="$2"
+                position="$(single_line "$2")"
                 shift 2
                 ;;
             --status)
@@ -465,7 +503,11 @@ write_state() {
                 shift 2
                 ;;
             --blocker)
-                blocker="$2"
+                blocker="$(single_line "$2")"
+                shift 2
+                ;;
+            --history)
+                history_note="$(single_line "$2")"
                 shift 2
                 ;;
             *)
@@ -478,12 +520,14 @@ write_state() {
         error "State file not found. Run 'init_project' first."
     fi
     
-    # Read current state
+    # Read current state; a missing or repeated header line stops here, before any write.
+    require_state_fields
     local current_schema current_phase_val current_position_val current_status
-    current_schema=$(grep -E "^\*\*Schema:\*\*" "$STATE_FILE" | sed 's/\*\*Schema:\*\* //' || echo "2.0")
-    current_phase_val=$(grep -E "^\*\*Current Phase:\*\*" "$STATE_FILE" | sed 's/\*\*Current Phase:\*\* //' || echo "1")
-    current_position_val=$(grep -E "^\*\*Current Position:\*\*" "$STATE_FILE" | sed 's/\*\*Current Position:\*\* //' || echo "unknown")
-    current_status=$(grep -E "^\*\*Status:\*\*" "$STATE_FILE" | sed 's/\*\*Status:\*\* //' || echo "ready")
+    current_schema=$(state_field "Schema")
+    current_schema="${current_schema:-2.0}"
+    current_phase_val=$(state_field "Current Phase")
+    current_position_val=$(state_field "Current Position")
+    current_status=$(state_field "Status")
     
     # Extract existing history (everything after "## History")
     local history
@@ -507,8 +551,13 @@ write_state() {
         blocker_section="- $blocker"
     fi
     
-    # Build new history entry
-    local new_history_entry="- [$timestamp] Phase $new_phase: $new_position ($new_status)"
+    # Build new history entry. The status sits in a fixed slot right after the phase
+    # number, before any free text, so get_phase_status reads it from there only and
+    # neither the position nor a note can stand in for it.
+    local new_history_entry="- [$timestamp] Phase $new_phase ($new_status): $new_position"
+    if [[ -n "$history_note" ]]; then
+        new_history_entry="$new_history_entry: $history_note"
+    fi
     
     # Generate new STATE.md content
     local new_content
@@ -534,6 +583,139 @@ EOF
     
     atomic_write "$STATE_FILE" "$new_content"
     success "Updated STATE.md (phase=$new_phase, status=$new_status)"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GET_PHASE_STATUS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Prints the status recorded for phase N: the current status when N is the current
+# phase, otherwise the status of the newest history record for N, otherwise
+# "pending". Nothing is inferred from phase order: a phase that was skipped, or
+# reopened and left blocked, reports what was recorded for it. The flow skills
+# gate on this ("Discover phase not marked complete"). Read-only.
+get_phase_status() {
+    local phase="${1:-}"
+    [[ -n "$phase" ]] || error "Phase number required. Usage: get_phase_status <phase>"
+    validate_phase "$phase"
+    if [[ ! -f "$STATE_FILE" ]]; then
+        error "State file not found. Run 'init_project' first."
+    fi
+    local current current_status recorded
+    current=$(state_field "Current Phase")
+    [[ "$current" =~ ^[0-9]+$ ]] || error "STATE.md has no valid '**Current Phase:**' line: $STATE_FILE"
+    if [[ $((10#$phase)) -eq $((10#$current)) ]]; then
+        current_status=$(state_field "Status")
+        [[ -n "$current_status" ]] || error "STATE.md has no '**Status:**' line: $STATE_FILE"
+        echo "$current_status"
+        return 0
+    fi
+    # History lines read "- [time] Phase N (status): position", optionally followed
+    # by ": note", newest first (write_state prepends). The status is read only from
+    # the slot right after "Phase N", so free text can never stand in for it. Lines
+    # for phase N in any other form (records written before this format) are not
+    # read; they are counted so the caller is told why the answer is "pending".
+    local result unread
+    result=$(awk -v want="$((10#$phase))" -v statuses="$VALID_STATUSES" '
+        BEGIN { n = split(statuses, list, " "); for (i = 1; i <= n; i++) valid[list[i]] = 1 }
+        /^## History/ { in_history = 1; next }
+        in_history && /^## / { exit }
+        !in_history || index($0, "- [") != 1 { next }
+        {
+            b = index($0, "]")
+            if (b == 0 || substr($0, b, 8) != "] Phase ") next
+            rest = substr($0, b + 8)
+            d = 0
+            while (d < length(rest) && substr(rest, d + 1, 1) ~ /[0-9]/) d++
+            if (d == 0 || substr(rest, 1, d) + 0 != want + 0) next
+            rest = substr(rest, d + 1)
+            cl = index(rest, ")")
+            if (substr(rest, 1, 2) == " (" && cl > 3) {
+                status = substr(rest, 3, cl - 3)
+                after = substr(rest, cl + 1)
+                if ((status in valid) && (after == "" || substr(after, 1, 2) == ": ")) {
+                    recorded = status
+                    exit
+                }
+            }
+            unread++
+        }
+        END {
+            print (recorded == "" ? "pending" : recorded)
+            print unread + 0
+        }
+    ' "$STATE_FILE")
+    recorded="${result%%$'\n'*}"
+    unread="${result#*$'\n'}"
+    if [[ "$recorded" == "pending" && "$unread" != "0" ]]; then
+        warning "Phase $phase has $unread history line(s) not in the 'Phase N (status): position' form; they were not read. Record the phase again to update its status."
+    fi
+    echo "$recorded"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# UPDATE_ROADMAP
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Records a phase's synthesis in ROADMAP.md: one dated line at the end of the
+# "## Definitions" section (created at the end of the file when missing) naming
+# the synthesis file, so the roadmap points at what was decided. It does not
+# rewrite the roadmap's phases or success criteria.
+update_roadmap() {
+    local synthesis=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --from-synthesis)
+                [[ $# -ge 2 ]] || error "--from-synthesis requires a file"
+                synthesis="$2"
+                shift 2
+                ;;
+            *)
+                error "Unknown argument: $1"
+                ;;
+        esac
+    done
+    [[ -n "$synthesis" ]] || error "Usage: update_roadmap --from-synthesis <file>"
+    [[ -f "$synthesis" ]] || error "Synthesis file not found: $synthesis"
+    if [[ ! -f "$ROADMAP_FILE" ]]; then
+        error "Roadmap not found. Run 'init_project' first."
+    fi
+    local current entry temp_file
+    current=$(state_field "Current Phase")
+    [[ "$current" =~ ^[0-9]+$ ]] || current="?"
+    entry="- [$(get_timestamp)] Phase $current synthesis: $(single_line "$synthesis")"
+    if ! temp_file=$(mktemp "${ROADMAP_FILE}.tmp.XXXXXX"); then
+        error "Failed to allocate temporary roadmap file"
+    fi
+    # The entry goes through the environment, not awk -v, which would expand
+    # backslash escapes in the path and could split the line.
+    if ! OCTO_ROADMAP_ENTRY="$entry" awk '
+        { line[NR] = $0 }
+        END {
+            entry = ENVIRON["OCTO_ROADMAP_ENTRY"]
+            for (i = 1; i <= NR; i++) if (line[i] ~ /^## Definitions[ \t]*$/) { start = i; break }
+            if (!start) {
+                for (i = 1; i <= NR; i++) print line[i]
+                if (NR > 0 && line[NR] != "") print ""
+                print "## Definitions"
+                print ""
+                print entry
+                exit
+            }
+            stop = NR
+            for (i = start + 1; i <= NR; i++) if (line[i] ~ /^## /) { stop = i - 1; break }
+            last = stop
+            while (last > start && line[last] ~ /^[ \t]*$/) last--
+            for (i = 1; i <= last; i++) print line[i]
+            if (last == start) print ""
+            print entry
+            for (i = last + 1; i <= NR; i++) print line[i]
+        }
+    ' "$ROADMAP_FILE" > "$temp_file" || ! mv "$temp_file" "$ROADMAP_FILE"; then
+        rm -f "$temp_file"
+        error "Failed to update $ROADMAP_FILE"
+    fi
+    success "Updated ROADMAP.md (synthesis recorded)"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -725,6 +907,15 @@ Commands:
                                      --position <text>  Set current position description
                                      --status <status>  Set status (see valid values below)
                                      --blocker <text>   Set blocker description
+                                     --history <text>   Add a note to this update's history line
+                                     (update_state is the same command; the flow skills use that name)
+
+  get_phase_status <N>               Print phase N's status: the current status for the current
+                                     phase, else its newest history record, else "pending"
+
+  update_roadmap --from-synthesis <file>
+                                     Record a phase's synthesis file under "## Definitions"
+                                     in ROADMAP.md
 
   update_project [options]           Replace one PROJECT.md section atomically
                                      --section <name>   vision, requirements, constraints, decisions
@@ -788,8 +979,14 @@ main() {
         read_state)
             read_state
             ;;
-        write_state)
+        write_state|update_state)
             write_state "$@"
+            ;;
+        get_phase_status)
+            get_phase_status "$@"
+            ;;
+        update_roadmap)
+            update_roadmap "$@"
             ;;
         update_project)
             update_project "$@"

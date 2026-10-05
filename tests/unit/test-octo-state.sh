@@ -428,6 +428,257 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TEST: the commands the flow skills call (update_state, get_phase_status, update_roadmap)
+# ═══════════════════════════════════════════════════════════════════════════════
+# flow-define, flow-develop, flow-deliver and flow-discover call these three names; until
+# they existed every call printed "Unknown command" and the skills' state steps did nothing.
+
+echo ""
+echo "Test 18: Checking the commands the flow skills call..."
+
+FLOW_DIR=$(mktemp -d)
+flow() { (cd "$FLOW_DIR" && "$OCTO_STATE" "$@"); }
+phase_status() { flow get_phase_status "$1" 2>/dev/null; }
+history_lines() { sed -n '/^## History/,$ p' "$FLOW_DIR/.octo/STATE.md" | grep -c '^- \[' || true; }
+
+flow init_project >/dev/null 2>&1 || true
+if flow update_state --phase 2 --position "Definition" --status in_progress >/dev/null 2>&1 &&
+    grep -q "^\*\*Current Phase:\*\* 2" "$FLOW_DIR/.octo/STATE.md"; then
+    pass "update_state updates STATE.md like write_state"
+else
+    fail "update_state rejected or did not write" "flow skills call update_state"
+fi
+
+before=$(history_lines)
+if flow update_state --history "$(printf 'Define phase completed\nsecond line')" >/dev/null 2>&1 &&
+    grep -q "Phase 2 (in_progress): Definition: Define phase completed second line$" "$FLOW_DIR/.octo/STATE.md" &&
+    [[ "$(history_lines)" -eq $((before + 1)) ]] &&
+    ! grep -q "^second line" "$FLOW_DIR/.octo/STATE.md"; then
+    pass "update_state --history records the note on one history line"
+else
+    fail "--history rejected, not recorded, or split across lines" "$(sed -n '/^## History/,$ p' "$FLOW_DIR/.octo/STATE.md")"
+fi
+
+if [[ "$(phase_status 2)" == "in_progress" && "$(phase_status 1)" == "ready" && "$(phase_status 3)" == "pending" ]]; then
+    pass "get_phase_status reads the current status and the recorded status, never the phase order"
+else
+    fail "get_phase_status wrong" "got 1=$(phase_status 1) 2=$(phase_status 2) 3=$(phase_status 3) (want ready in_progress pending)"
+fi
+
+# A completed phase that is reopened and left blocked is not complete; a phase that was
+# never run is pending even when a later phase is current.
+flow update_state --phase 2 --status complete >/dev/null 2>&1 || true
+flow update_state --phase 2 --status blocked >/dev/null 2>&1 || true
+flow update_state --phase 4 --position "Delivery" --status in_progress >/dev/null 2>&1 || true
+if [[ "$(phase_status 2)" == "blocked" && "$(phase_status 3)" == "pending" && "$(phase_status 4)" == "in_progress" ]]; then
+    pass "get_phase_status reports a reopened phase's newest record and a skipped phase as pending"
+else
+    fail "reopened or skipped phase misreported" "got 2=$(phase_status 2) 3=$(phase_status 3) 4=$(phase_status 4) (want blocked pending in_progress)"
+fi
+
+flow update_state --phase 3 --position "Development" --status complete_with_gaps >/dev/null 2>&1 || true
+flow update_state --phase 4 --position "Delivery" --status in_progress >/dev/null 2>&1 || true
+if [[ "$(phase_status 3)" == "complete_with_gaps" ]]; then
+    pass "get_phase_status returns the recorded status verbatim (complete_with_gaps)"
+else
+    fail "complete_with_gaps misreported" "got $(phase_status 3)"
+fi
+
+# Free text in a note or a position cannot stand in for the status: the status is read
+# only from its slot right after "Phase N".
+flow update_state --phase 5 --position "Review" --status in_progress --history "looks done (complete)" >/dev/null 2>&1 || true
+flow update_state --phase 6 --position "Review" --status blocked --history "x (complete): y" >/dev/null 2>&1 || true
+flow update_state --phase 8 --position "Retry (complete) parser" --status blocked >/dev/null 2>&1 || true
+flow update_state --phase 9 --position "Fix (complete): retry" --status blocked >/dev/null 2>&1 || true
+flow update_state --phase 12 --position "(complete)" --status paused --history "(complete)" >/dev/null 2>&1 || true
+flow update_state --phase 7 --position "Next" --status ready >/dev/null 2>&1 || true
+if [[ "$(phase_status 5)" == "in_progress" && "$(phase_status 6)" == "blocked" && "$(phase_status 8)" == "blocked" &&
+      "$(phase_status 9)" == "blocked" && "$(phase_status 12)" == "paused" ]] &&
+    grep -q "Phase 9 (blocked): Fix (complete): retry$" "$FLOW_DIR/.octo/STATE.md"; then
+    pass "(complete) inside a note or a position does not change the recorded status"
+else
+    fail "free text spoofed the status" "got 5=$(phase_status 5) 6=$(phase_status 6) 8=$(phase_status 8) 9=$(phase_status 9) 12=$(phase_status 12) (want in_progress blocked blocked blocked paused)"
+fi
+
+# A record in any other form is not read; the caller is told why the answer is pending.
+LEGACY_DIR=$(mktemp -d)
+(
+    cd "$LEGACY_DIR"
+    "$OCTO_STATE" init_project >/dev/null 2>&1
+    printf -- '- [2026-01-01T00:00:00Z] Phase 3: Development (complete)\n' >> .octo/STATE.md
+) || true
+legacy_status=$(cd "$LEGACY_DIR" && "$OCTO_STATE" get_phase_status 3 2>"$LEGACY_DIR/err") || legacy_status="exit-$?"
+if [[ "$legacy_status" == "pending" ]] && grep -q "Phase 3 has 1 history line" "$LEGACY_DIR/err"; then
+    pass "get_phase_status does not read a record outside the status slot, and says so"
+else
+    fail "a record outside the status slot was read, or not reported" "status=$legacy_status err=$(cat "$LEGACY_DIR/err")"
+fi
+rm -rf "$LEGACY_DIR"
+
+# Newlines in --position and --blocker are folded, so neither can add a header line or a
+# history record of its own.
+FOLD_DIR=$(mktemp -d)
+(cd "$FOLD_DIR" && "$OCTO_STATE" init_project >/dev/null 2>&1) || true
+(cd "$FOLD_DIR" && "$OCTO_STATE" update_state --phase 2 --status blocked \
+    --position "$(printf 'Retry\n**Status:** complete')" >/dev/null 2>&1) || true
+fold_current=$(cd "$FOLD_DIR" && "$OCTO_STATE" get_phase_status 2 2>/dev/null) || fold_current="exit-$?"
+if [[ "$fold_current" == "blocked" && "$(grep -c '^\*\*Status:\*\*' "$FOLD_DIR/.octo/STATE.md")" == "1" ]] &&
+    grep -q '^\*\*Current Position:\*\* Retry \*\*Status:\*\* complete$' "$FOLD_DIR/.octo/STATE.md"; then
+    pass "update_state --position folds newlines onto the position line"
+else
+    fail "a newline in --position added a line" "status=$fold_current; $(cat "$FOLD_DIR/.octo/STATE.md")"
+fi
+(cd "$FOLD_DIR" && "$OCTO_STATE" update_state --phase 3 --status in_progress \
+    --blocker "$(printf 'waiting\n## History\n- [2026-01-01T00:00:00Z] Phase 9 (complete): forged')" >/dev/null 2>&1) || true
+fold_forged=$(cd "$FOLD_DIR" && "$OCTO_STATE" get_phase_status 9 2>/dev/null) || fold_forged="exit-$?"
+if [[ "$fold_forged" == "pending" && "$(grep -c '^## History' "$FOLD_DIR/.octo/STATE.md")" == "1" ]] &&
+    grep -q '^- waiting ## History - \[2026-01-01T00:00:00Z\] Phase 9 (complete): forged$' "$FOLD_DIR/.octo/STATE.md"; then
+    pass "update_state --blocker folds newlines onto the blocker line"
+else
+    fail "a newline in --blocker added a section or a record" "phase 9=$fold_forged; $(cat "$FOLD_DIR/.octo/STATE.md")"
+fi
+rm -rf "$FOLD_DIR"
+
+# Backslashes are kept as written, on one line.
+(cd "$FLOW_DIR" && "$OCTO_STATE" update_state --phase 7 --position 'C:\new\table' >/dev/null 2>&1) || true
+if grep -qF '**Current Position:** C:\new\table' "$FLOW_DIR/.octo/STATE.md" &&
+    grep -qF 'Phase 7 (ready): C:\new\table' "$FLOW_DIR/.octo/STATE.md"; then
+    pass "update_state keeps backslashes in a position"
+else
+    fail "a backslash in a position was changed" "$(sed -n '1,8p' "$FLOW_DIR/.octo/STATE.md")"
+fi
+
+flow update_state --phase 10 --position "Ten" --status complete >/dev/null 2>&1 || true
+flow update_state --phase 11 --position "Eleven" --status ready >/dev/null 2>&1 || true
+if [[ "$(phase_status 1)" == "ready" && "$(phase_status 10)" == "complete" ]]; then
+    pass "get_phase_status does not confuse phase 1 with phase 10"
+else
+    fail "phase numbers confused" "got 1=$(phase_status 1) 10=$(phase_status 10)"
+fi
+
+if ! flow get_phase_status >/dev/null 2>&1 && ! flow get_phase_status abc >/dev/null 2>&1; then
+    pass "get_phase_status refuses a missing or non-numeric phase"
+else
+    fail "get_phase_status accepted a bad phase" "needs a positive integer"
+fi
+
+# A recorded completion stays readable in a large STATE.md (a sed | grep -q pipeline under
+# pipefail answered "pending" here once the history passed about 113 KB, on SIGPIPE). The
+# current phase is 1, so nothing but the phase 2 record can make the answer "complete".
+BIG_DIR=$(mktemp -d)
+(
+    cd "$BIG_DIR"
+    "$OCTO_STATE" init_project >/dev/null 2>&1
+    {
+        sed -n '1,/^## History/p' .octo/STATE.md | sed 's/^\*\*Current Phase:\*\* .*/**Current Phase:** 1/'
+        echo ""
+        echo "- [2026-01-01T00:00:00Z] Phase 2 (complete): Definition"
+        i=0
+        while [[ $i -lt 4000 ]]; do
+            echo "- [2026-01-01T00:00:00Z] Phase 8 (in_progress): Padding entry number $i for a large history"
+            i=$((i + 1))
+        done
+    } > .octo/STATE.new && mv .octo/STATE.new .octo/STATE.md
+) || true
+big_size=$(wc -c < "$BIG_DIR/.octo/STATE.md" | tr -d ' ')
+big_status=$(cd "$BIG_DIR" && "$OCTO_STATE" get_phase_status 2 2>/dev/null || echo "exit-$?")
+if [[ "$big_size" -gt 200000 && "$big_status" == "complete" ]]; then
+    pass "get_phase_status reads a completion in a ${big_size}-byte STATE.md"
+else
+    fail "large STATE.md misread" "size=$big_size status=$big_status"
+fi
+rm -rf "$BIG_DIR"
+
+# Missing lines and missing values fail with a message instead of exiting silently.
+BROKEN_DIR=$(mktemp -d)
+(cd "$BROKEN_DIR" && "$OCTO_STATE" init_project >/dev/null 2>&1 && sed -i.bak '/^\*\*Current Phase:\*\*/d' .octo/STATE.md) || true
+broken_err=$(cd "$BROKEN_DIR" && "$OCTO_STATE" get_phase_status 1 2>&1 >/dev/null) && broken_rc=0 || broken_rc=$?
+noval_err=$(flow update_state --history 2>&1 >/dev/null) && noval_rc=0 || noval_rc=$?
+if [[ "$broken_rc" -ne 0 && "$broken_err" == *"Current Phase"* && "$noval_rc" -ne 0 && "$noval_err" == *"--history requires a value"* ]]; then
+    pass "get_phase_status and update_state explain their failures"
+else
+    fail "silent failure" "get_phase_status rc=$broken_rc err='$broken_err'; update_state rc=$noval_rc err='$noval_err'"
+fi
+rm -rf "$BROKEN_DIR"
+
+# The writer checks the header lines it rebuilds from before it writes anything: a missing
+# or repeated line is an error and STATE.md is left exactly as it was.
+writer_refuses() {
+    local edit="$1" want="$2" dir err rc before
+    dir=$(mktemp -d)
+    (cd "$dir" && "$OCTO_STATE" init_project >/dev/null 2>&1 && eval "$edit") || true
+    before=$(cksum < "$dir/.octo/STATE.md")
+    err=$(cd "$dir" && "$OCTO_STATE" update_state --history "note" 2>&1 >/dev/null) && rc=0 || rc=$?
+    [[ "$rc" -ne 0 && "$err" == *"$want"* && "$(cksum < "$dir/.octo/STATE.md")" == "$before" ]]
+    rc=$?
+    rm -rf "$dir"
+    return "$rc"
+}
+if writer_refuses "sed -i.bak '/^\*\*Status:\*\*/d' .octo/STATE.md" "no '**Status:**' line" &&
+    writer_refuses "sed -i.bak '/^\*\*Current Position:\*\*/d' .octo/STATE.md" "no '**Current Position:**' line" &&
+    writer_refuses "sed -i.bak '/^\*\*Current Phase:\*\*/d' .octo/STATE.md" "no '**Current Phase:**' line" &&
+    writer_refuses "printf '**Status:** complete\\n' >> .octo/STATE.md" "2 '**Status:**' lines"; then
+    pass "update_state refuses a STATE.md with a missing or repeated header line and leaves it unchanged"
+else
+    fail "update_state wrote over a damaged STATE.md" "a missing or repeated Current Phase, Current Position or Status line must stop the write"
+fi
+
+# update_roadmap writes inside "## Definitions", in order, and keeps the rest of the file.
+printf '# Synthesis\n' > "$FLOW_DIR/synthesis.md"
+printf '\n## Definitions\n\n- earlier entry\n\n## Notes\n\nkeep me\n' >> "$FLOW_DIR/.octo/ROADMAP.md"
+if flow update_roadmap --from-synthesis synthesis.md >/dev/null 2>&1 &&
+    flow update_roadmap --from-synthesis synthesis.md >/dev/null 2>&1; then
+    defs=$(sed -n '/^## Definitions/,/^## Notes/p' "$FLOW_DIR/.octo/ROADMAP.md")
+    first_new=$(grep -n 'synthesis: synthesis.md' "$FLOW_DIR/.octo/ROADMAP.md" | head -1 | cut -d: -f1)
+    earlier=$(grep -n -- '- earlier entry' "$FLOW_DIR/.octo/ROADMAP.md" | cut -d: -f1)
+    notes=$(grep -n '^## Notes' "$FLOW_DIR/.octo/ROADMAP.md" | cut -d: -f1)
+    if [[ "$(grep -c 'synthesis: synthesis.md' <<< "$defs")" == "2" &&
+          "$(grep -c '^## Definitions' "$FLOW_DIR/.octo/ROADMAP.md")" == "1" &&
+          "$earlier" -lt "$first_new" && "$first_new" -lt "$notes" &&
+          "$(tail -1 "$FLOW_DIR/.octo/ROADMAP.md")" == "keep me" &&
+          "$(tail -c 1 "$FLOW_DIR/.octo/ROADMAP.md" | od -An -c | tr -d ' ')" == '\n' ]] &&
+        grep -q "^## Phase 1: Initial Setup" "$FLOW_DIR/.octo/ROADMAP.md" &&
+        grep -q "Phase 11 synthesis: synthesis.md" <<< "$defs"; then
+        pass "update_roadmap records each synthesis inside ## Definitions and keeps the roadmap"
+    else
+        fail "update_roadmap wrote outside ## Definitions or changed the file" "$(cat "$FLOW_DIR/.octo/ROADMAP.md")"
+    fi
+else
+    fail "update_roadmap rejected a valid call" "flow-define calls update_roadmap"
+fi
+
+NOSEC_DIR=$(mktemp -d)
+(
+    cd "$NOSEC_DIR"
+    "$OCTO_STATE" init_project >/dev/null 2>&1
+    printf '# Synthesis\n' > synthesis.md
+    rm .octo/STATE.md
+    "$OCTO_STATE" update_roadmap --from-synthesis synthesis.md >/dev/null 2>&1 &&
+        "$OCTO_STATE" update_roadmap --from-synthesis synthesis.md >/dev/null 2>&1 &&
+        [[ "$(grep -c '^## Definitions' .octo/ROADMAP.md)" == "1" ]] &&
+        [[ "$(sed -n '/^## Definitions/,$ p' .octo/ROADMAP.md | grep -c 'Phase ? synthesis: synthesis.md')" == "2" ]]
+) && pass "update_roadmap adds ## Definitions once when missing and works without STATE.md" ||
+    fail "update_roadmap failed without a Definitions section or STATE.md" "$(cat "$NOSEC_DIR/.octo/ROADMAP.md" 2>/dev/null)"
+rm -rf "$NOSEC_DIR"
+
+if ! flow update_roadmap --from-synthesis missing.md >/dev/null 2>&1; then
+    pass "update_roadmap refuses a missing synthesis file"
+else
+    fail "update_roadmap accepted a missing file" "should refuse"
+fi
+
+printf '# Synthesis\n' > "$FLOW_DIR/syn\\new.md"
+roadmap_lines=$(wc -l < "$FLOW_DIR/.octo/ROADMAP.md" | tr -d ' ')
+if flow update_roadmap --from-synthesis 'syn\new.md' >/dev/null 2>&1 &&
+    grep -qF 'synthesis: syn\new.md' "$FLOW_DIR/.octo/ROADMAP.md" &&
+    [[ "$(wc -l < "$FLOW_DIR/.octo/ROADMAP.md" | tr -d ' ')" -eq $((roadmap_lines + 1)) ]]; then
+    pass "update_roadmap keeps a backslash in the path, on one line"
+else
+    fail "update_roadmap changed or split a path with a backslash" "$(sed -n '/^## Definitions/,$ p' "$FLOW_DIR/.octo/ROADMAP.md")"
+fi
+rm -rf "$FLOW_DIR"
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
 

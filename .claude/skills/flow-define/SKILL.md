@@ -53,7 +53,8 @@ contribution, and vote distinct.
 
 ## Pre-Definition: State Check
 
-Before starting definition:
+When project-local persistence is enabled (`OCTOPUS_PROJECT_PERSISTENCE=true`, the same
+opt-in flow-discover uses), before starting definition:
 1. Read `.octo/STATE.md` to verify Discover phase complete
 2. Update STATE.md:
    - current_phase: 2
@@ -61,19 +62,31 @@ Before starting definition:
    - status: "in_progress"
 
 ```bash
-# Verify Discover phase is complete
-if [[ -f ".octo/STATE.md" ]]; then
-  discover_status=$("${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" get_phase_status 1)
-  if [[ "$discover_status" != "complete" ]]; then
-    echo "⚠️ Warning: Discover phase not marked complete. Consider running discovery first."
+# Project-local lifecycle state is an explicit opt-in, as in flow-discover.
+if [[ "${OCTOPUS_PROJECT_PERSISTENCE:-false}" == "true" ]]; then
+  if [[ ! -f ".octo/STATE.md" ]]; then
+    if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" init_project; then
+      echo "Define incomplete: could not initialize opt-in project state." >&2
+      exit 1
+    fi
+  fi
+
+  # Verify Discover phase is complete
+  discover_status=$("${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" get_phase_status 1) || discover_status="unknown"
+  case "$discover_status" in
+    complete|complete_with_gaps|shipped) ;;
+    *) echo "⚠️ Warning: Discover phase not marked complete. Consider running discovery first." ;;
+  esac
+
+  # Update state for Definition phase
+  if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
+      --phase 2 \
+      --position "Definition" \
+      --status "in_progress"; then
+    echo "Define incomplete: could not persist in-progress state." >&2
+    exit 1
   fi
 fi
-
-# Update state for Definition phase
-"${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
-  --phase 2 \
-  --position "Definition" \
-  --status "in_progress"
 ```
 
 ---
@@ -753,21 +766,34 @@ Grasp workflows typically cost 0.01-0.05 USD per task depending on complexity.
 
 ## Post-Definition: State Update
 
-After definition completes:
+After definition completes, and only when `OCTOPUS_PROJECT_PERSISTENCE=true`:
 1. Update `.octo/STATE.md` with completion
-2. Populate `.octo/ROADMAP.md` with defined phases and success criteria
+2. Record the consensus document under `## Definitions` in `.octo/ROADMAP.md` (the
+   roadmap's phases and success criteria are not rewritten)
 
 ```bash
-# Update state after Definition completion
-"${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
-  --status "complete" \
-  --history "Define phase completed"
+# Project-local lifecycle state is an explicit opt-in, as in flow-discover.
+if [[ "${OCTOPUS_PROJECT_PERSISTENCE:-false}" == "true" ]]; then
+  # Update state after Definition completion
+  if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
+      --status "complete" \
+      --history "Define phase completed"; then
+    echo "Define incomplete: could not persist completion state." >&2
+    exit 1
+  fi
 
-# Populate ROADMAP.md with defined requirements
-if [[ -f "$SYNTHESIS_FILE" ]]; then
-  echo "📝 Updating .octo/ROADMAP.md with defined phases..."
-  "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_roadmap \
-    --from-synthesis "$SYNTHESIS_FILE"
+  # Record the consensus document under "## Definitions" in ROADMAP.md. SYNTHESIS_FILE
+  # is set by the STEP 5 verification block; set it again here if this is a new shell.
+  if [[ -f "${SYNTHESIS_FILE:-}" ]]; then
+    echo "📝 Recording the consensus document in .octo/ROADMAP.md..."
+    if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_roadmap \
+        --from-synthesis "$SYNTHESIS_FILE"; then
+      echo "Define incomplete: could not record the consensus in .octo/ROADMAP.md." >&2
+      exit 1
+    fi
+  else
+    echo "⚠️ SYNTHESIS_FILE does not name a file in this shell; .octo/ROADMAP.md was not updated." >&2
+  fi
 fi
 ```
 

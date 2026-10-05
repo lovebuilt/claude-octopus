@@ -34,7 +34,8 @@ Use stable task IDs and metadata when present. The parent resolves paths, depend
 
 ## Pre-Development: State Check
 
-Before starting development:
+When project-local persistence is enabled (`OCTOPUS_PROJECT_PERSISTENCE=true`, the same
+opt-in flow-discover uses), before starting development:
 1. Read `.octo/STATE.md` to verify Define phase complete
 2. Update STATE.md:
    - current_phase: 3
@@ -42,19 +43,31 @@ Before starting development:
    - status: "in_progress"
 
 ```bash
-# Verify Define phase is complete
-if [[ -f ".octo/STATE.md" ]]; then
-  define_status=$("${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" get_phase_status 2)
-  if [[ "$define_status" != "complete" ]]; then
-    echo "⚠️ Warning: Define phase not marked complete. Consider running definition first."
+# Project-local lifecycle state is an explicit opt-in, as in flow-discover.
+if [[ "${OCTOPUS_PROJECT_PERSISTENCE:-false}" == "true" ]]; then
+  if [[ ! -f ".octo/STATE.md" ]]; then
+    if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" init_project; then
+      echo "Develop incomplete: could not initialize opt-in project state." >&2
+      exit 1
+    fi
+  fi
+
+  # Verify Define phase is complete
+  define_status=$("${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" get_phase_status 2) || define_status="unknown"
+  case "$define_status" in
+    complete|complete_with_gaps|shipped) ;;
+    *) echo "⚠️ Warning: Define phase not marked complete. Consider running definition first." ;;
+  esac
+
+  # Update state for Development phase
+  if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
+      --phase 3 \
+      --position "Development" \
+      --status "in_progress"; then
+    echo "Develop incomplete: could not persist in-progress state." >&2
+    exit 1
   fi
 fi
-
-# Update state for Development phase
-"${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
-  --phase 3 \
-  --position "Development" \
-  --status "in_progress"
 ```
 
 
@@ -778,7 +791,8 @@ After development completes:
 1. Run fresh targeted tests for the changed behavior through
    `skill-verification-gate`; stop if they fail.
 2. Create checkpoint: `git tag octo-checkpoint-post-develop-$(date +%Y%m%d-%H%M%S)`
-3. Update `.octo/STATE.md` with completion and add a history entry with files modified.
+3. When `OCTOPUS_PROJECT_PERSISTENCE=true`, update `.octo/STATE.md` with completion and add
+   a history entry with files modified.
 
 ```bash
 # Enter this block only after fresh targeted tests pass.
@@ -787,14 +801,23 @@ git tag "$checkpoint_tag" -m "Post-develop checkpoint from embrace workflow"
 echo "📌 Created checkpoint: $checkpoint_tag"
 
 # Update state only after verification and checkpoint creation succeed.
-"${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
-  --status "complete" \
-  --history "Develop phase completed"
+# Project-local lifecycle state is an explicit opt-in, as in flow-discover.
+if [[ "${OCTOPUS_PROJECT_PERSISTENCE:-false}" == "true" ]]; then
+  if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
+      --status "complete" \
+      --history "Develop phase completed"; then
+    echo "Develop incomplete: could not persist completion state." >&2
+    exit 1
+  fi
 
-# Record files modified in this phase
-modified_files=$(git diff --name-only HEAD~1 2>/dev/null || echo "See git log")
-"${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
-  --history "Files modified: $modified_files"
+  # Record files modified in this phase (update_state folds the list onto one line)
+  modified_files=$(git diff --name-only HEAD~1 2>/dev/null || echo "See git log")
+  if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
+      --history "Files modified: $modified_files"; then
+    echo "Develop incomplete: could not record the modified files." >&2
+    exit 1
+  fi
+fi
 ```
 
 

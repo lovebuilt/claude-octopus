@@ -14,7 +14,8 @@ disable-model-invocation: true
 
 ## Pre-Delivery: State Check
 
-Before starting delivery:
+When project-local persistence is enabled (`OCTOPUS_PROJECT_PERSISTENCE=true`, the same
+opt-in flow-discover uses), before starting delivery:
 1. Read `.octo/STATE.md` to verify Develop phase complete
 2. Update STATE.md:
    - current_phase: 4
@@ -22,19 +23,31 @@ Before starting delivery:
    - status: "in_progress"
 
 ```bash
-# Verify Develop phase is complete
-if [[ -f ".octo/STATE.md" ]]; then
-  develop_status=$("${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" get_phase_status 3)
-  if [[ "$develop_status" != "complete" ]]; then
-    echo "⚠️ Warning: Develop phase not marked complete. Consider completing development first."
+# Project-local lifecycle state is an explicit opt-in, as in flow-discover.
+if [[ "${OCTOPUS_PROJECT_PERSISTENCE:-false}" == "true" ]]; then
+  if [[ ! -f ".octo/STATE.md" ]]; then
+    if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" init_project; then
+      echo "Deliver incomplete: could not initialize opt-in project state." >&2
+      exit 1
+    fi
+  fi
+
+  # Verify Develop phase is complete
+  develop_status=$("${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" get_phase_status 3) || develop_status="unknown"
+  case "$develop_status" in
+    complete|complete_with_gaps|shipped) ;;
+    *) echo "⚠️ Warning: Develop phase not marked complete. Consider completing development first." ;;
+  esac
+
+  # Update state for Delivery phase
+  if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
+      --phase 4 \
+      --position "Delivery" \
+      --status "in_progress"; then
+    echo "Deliver incomplete: could not persist in-progress state." >&2
+    exit 1
   fi
 fi
-
-# Update state for Delivery phase
-"${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
-  --phase 4 \
-  --position "Delivery" \
-  --status "in_progress"
 ```
 
 
@@ -828,7 +841,7 @@ The doc-sync skill will:
 After delivery validation and doc-sync complete, route according to the user's explicit
 request:
 
-- **Ship requested:** update `.octo/STATE.md`, then read and follow
+- **Ship requested:** update `.octo/STATE.md` (when `OCTOPUS_PROJECT_PERSISTENCE=true`), then read and follow
   `.claude/skills/skill-ship/SKILL.md` from the stable plugin root.
 - **Branch wrap-up requested:** read and follow
   `.claude/skills/skill-finish-branch/SKILL.md` from the stable plugin root.
@@ -837,9 +850,15 @@ request:
 
 ```bash
 # Run this block only when the user explicitly requested shipping.
-"${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
-  --status "complete" \
-  --history "All phases complete, ready to ship"
+# Project-local lifecycle state is an explicit opt-in, as in flow-discover.
+if [[ "${OCTOPUS_PROJECT_PERSISTENCE:-false}" == "true" ]]; then
+  if ! "${HOME}/.claude-octopus/plugin/scripts/octo-state.sh" update_state \
+      --status "complete" \
+      --history "All phases complete, ready to ship"; then
+    echo "Deliver incomplete: could not persist completion state." >&2
+    exit 1
+  fi
+fi
 
 # Display completion message with next steps
 echo ""
