@@ -347,7 +347,7 @@ _octo_provider_static_readiness() {
         opencode)
             remediation="Install OpenCode, then run: opencode auth login"
             if command -v opencode >/dev/null 2>&1; then
-                if [[ -f "${HOME}/.local/share/opencode/auth.json" ]] ||
+                if [[ -f "${HOME}/.local/share/opencode/auth.json" || -f "${HOME}/.local/share/opencode/opencode.db" ]] ||
                    _octo_value_has_nonwhitespace "${GITHUB_TOKEN:-${OPENROUTER_API_KEY:-${Z_AI_API_KEY:-${MINIMAX_API_KEY:-}}}}"; then
                     status="available"; reason_code="ready"; remediation=""
                 else

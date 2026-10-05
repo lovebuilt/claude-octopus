@@ -1261,6 +1261,18 @@ agy_current_model() {
     printf '%s\n' "default (unresolved)"
 }
 
+# True when `opencode auth list` lists at least one stored login, on OpenCode 1.x
+# ("N credentials" summary) and 2.x (one row per login, no summary). Bounded.
+_octo_opencode_auth_list_has_credentials() {
+    local out
+    out=$(timeout 10 opencode auth list </dev/null 2>&1) || return 1
+    if printf '%s\n' "$out" | grep -Eq '(^|[^0-9])[0-9]+ credentials?'; then
+        printf '%s\n' "$out" | grep -Eq '(^|[^0-9])[1-9][0-9]* credentials?'
+        return
+    fi
+    printf '%s\n' "$out" | grep -Eq '[^[:space:]]'
+}
+
 # ── detect_providers: multi-CLI + auth detection (moved from orchestrate.sh v9.22.1) ──
 detect_providers() {
     local result=""
@@ -1446,9 +1458,10 @@ detect_providers() {
     # Detect OpenCode CLI (v9.11.0 — multi-provider router)
     if { ! declare -f octo_provider_allowed >/dev/null 2>&1 || octo_provider_allowed opencode; } && command -v opencode &>/dev/null; then
         local opencode_auth="none"
-        if [[ -f "${HOME}/.local/share/opencode/auth.json" ]]; then
-            # Verify auth is actually valid via auth list (with timeout to prevent hang)
-            if timeout 3 opencode auth list &>/dev/null 2>&1; then
+        # OpenCode 1.x keeps logins in auth.json; 2.x (@opencode/cli) keeps them in opencode.db.
+        if [[ -f "${HOME}/.local/share/opencode/auth.json" || -f "${HOME}/.local/share/opencode/opencode.db" ]]; then
+            # Verify a login is actually listed (bounded: 2.x may start its background service first)
+            if _octo_opencode_auth_list_has_credentials; then
                 opencode_auth="multi"
             else
                 opencode_auth="expired"
