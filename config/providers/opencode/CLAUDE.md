@@ -75,8 +75,33 @@ Run `opencode models` for the full model catalog.
 ## Dispatch Pattern
 
 ```bash
-opencode run -m provider/model "<prompt>"
+opencode --pure run -m provider/model "<prompt>"   # OpenCode 1.x
+opencode run -m provider/model "<prompt>"          # OpenCode 2.x
 ```
+
+### The `--pure` flag (OpenCode 1.x vs 2.x)
+
+OpenCode 1.x takes the global `--pure` flag, which skips the external-plugin
+auto-title path that could hang `opencode run` (Issue #566). OpenCode 2.x
+removed the flag and rejects it (`Unrecognized flag: --pure`).
+
+At startup Octopus reads `opencode --help` once per run (bounded by
+`OCTOPUS_BARE_PROBE_TIMEOUT`, default 5s, stdin closed) and passes `--pure`
+only when the help declares it. If the probe fails (non-zero exit, no output or
+timeout) Octopus keeps passing `--pure` and logs a warning.
+
+`OCTOPUS_OPENCODE_PURE` skips the probe and decides directly. Values are case
+insensitive: `1`, `true`, `yes`, `on` pass `--pure`; `0`, `false`, `no`, `off`
+omit it. Any other value is ignored with a warning and the probe runs.
+
+The probe is not skipped by `OCTOPUS_SKIP_PROVIDER_PROBES` (on by default in
+remote sessions): it reads local help text only, and without it every dispatch
+on OpenCode 2.x would fail. Set `OCTOPUS_OPENCODE_PURE` to avoid it.
+
+Known limits: OpenCode 2.x runs requests through a background server by
+default, so a client-side timeout may not stop work already running on that
+server. The Issue #566 hang has not been reproduced on 2.x without `--pure`,
+but it has not been proven absent either.
 
 ## Role Assignment
 

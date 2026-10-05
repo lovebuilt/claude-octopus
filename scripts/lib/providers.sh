@@ -2,8 +2,9 @@
 # Claude Octopus — Provider Detection & Version Checking
 # ═══════════════════════════════════════════════════════════════════════════════
 # Extracted from orchestrate.sh in v9.7.7 monolith decomposition.
-# Contains: version_compare, detect_claude_code_version, detect_enterprise_backend,
-#           detect_fast_mode, check_provider_health, check_all_providers
+# Contains: version_compare, detect_claude_code_version, detect_opencode_capabilities,
+#           detect_enterprise_backend, detect_fast_mode, check_provider_health,
+#           check_all_providers
 # Source-safe: no main execution block.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -689,6 +690,85 @@ detect_claude_code_version() {
     detect_fast_mode
     log "INFO" "User /fast mode: $USER_FAST_MODE"
 
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPENCODE CAPABILITY DETECTION
+# OpenCode 1.x takes the global --pure flag, which skips the external-plugin
+# auto-title path behind the Issue #566 hang. OpenCode 2.x removed the flag and
+# rejects it ("Unrecognized flag: --pure"), so every dispatch fails if it is
+# passed. Probe the installed CLI's help once per run so dispatch never guesses.
+#
+# SUPPORTS_OPENCODE_PURE_FLAG is one of:
+#   true     --help declares --pure (or OCTOPUS_OPENCODE_PURE forces it on)
+#   false    --help succeeded without declaring it (or the override forces off)
+#   unknown  not probed (OpenCode absent) or the probe failed; dispatch keeps
+#            passing --pure, the behaviour before this probe existed
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Print true/false for a recognised OCTOPUS_OPENCODE_PURE value (case
+# insensitive). Returns 1 when unset, 2 when set to something unrecognised.
+_octo_opencode_pure_override() {
+    local value
+    [[ -n "${OCTOPUS_OPENCODE_PURE:-}" ]] || return 1
+    value="$(printf '%s' "$OCTOPUS_OPENCODE_PURE" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    case "$value" in
+        1|true|yes|on) printf '%s\n' true ;;
+        0|false|no|off) printf '%s\n' false ;;
+        *) return 2 ;;
+    esac
+}
+
+_octo_opencode_capability_warn() {
+    if declare -f log >/dev/null 2>&1; then
+        log WARN "$*"
+    else
+        printf 'WARN: %s\n' "$*" >&2
+    fi
+}
+
+detect_opencode_capabilities() {
+    SUPPORTS_OPENCODE_PURE_FLAG=unknown
+
+    local override="" override_rc=0
+    override="$(_octo_opencode_pure_override)" || override_rc=$?
+    if [[ "$override_rc" -eq 0 ]]; then
+        SUPPORTS_OPENCODE_PURE_FLAG="$override"
+        return 0
+    fi
+    if [[ "$override_rc" -eq 2 ]]; then
+        _octo_opencode_capability_warn "OCTOPUS_OPENCODE_PURE='${OCTOPUS_OPENCODE_PURE}' is not recognised (use 1/true/yes/on or 0/false/no/off); probing opencode --help instead"
+    fi
+
+    command -v opencode >/dev/null 2>&1 || return 0
+
+    # Deliberately not gated by OCTOPUS_SKIP_PROVIDER_PROBES (default on in
+    # remote sessions). That switch suppresses auth and model probes; this one
+    # only reads local help text inside the bounded runner, and skipping it
+    # would leave OpenCode 2.x failing every dispatch. OCTOPUS_OPENCODE_PURE
+    # is the way to skip it.
+    local probe_total probe_term probe_grace help_text="" probe_rc=0
+    read -r probe_total probe_term probe_grace <<< \
+        "$(_octo_bare_probe_budget "${OCTOPUS_BARE_PROBE_TIMEOUT:-5}" 2>/dev/null)"
+    # OpenCode 1.x prints its help on stderr, 2.x on stdout: capture both.
+    help_text="$(_octo_run_bare_probe_with_timeout \
+        "${probe_total:-5}" "${probe_term:-3}" "${probe_grace:-2}" \
+        opencode --help </dev/null 2>&1)" || probe_rc=$?
+    help_text="${help_text//$'\r'/}"
+
+    if [[ "$probe_rc" -ne 0 || -z "$help_text" ]]; then
+        _octo_opencode_capability_warn "opencode --help probe failed (exit ${probe_rc}); keeping --pure on OpenCode dispatches. OpenCode 2.x rejects --pure: set OCTOPUS_OPENCODE_PURE=0 to drop it, or OCTOPUS_OPENCODE_PURE=1 to keep it without probing"
+        return 0
+    fi
+
+    # Match an option declaration line ("  --pure  ..." or "  -p, --pure"),
+    # never a mention of the word elsewhere in the help text.
+    if grep -Eq -- '^[[:space:]]*(-[[:alnum:]],[[:space:]]*)?--pure([[:space:],=]|$)' <<< "$help_text"; then
+        SUPPORTS_OPENCODE_PURE_FLAG=true
+    else
+        SUPPORTS_OPENCODE_PURE_FLAG=false
+    fi
     return 0
 }
 

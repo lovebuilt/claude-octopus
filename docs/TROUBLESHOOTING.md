@@ -41,6 +41,8 @@ A provider is used only when its CLI is installed AND its auth check passes. If 
 
 **Antigravity reports "Individual quota reached"**: the quota belongs to the account `agy` is signed into for headless runs, and a working interactive session does not rule it out. Run plain `agy`, check the signed-in account and plan in the startup banner and `/usage`, and use `/logout` then `/login` to switch accounts or choose an enterprise sign-in with a Cloud project. Octopus marks `agy` quota-dead until the reported reset, and grasp then uses Claude for success criteria and consensus.
 
+**OpenCode fails with "Unrecognized flag: --pure"**: OpenCode 2.x removed the `--pure` flag that 1.x needs. Octopus checks `opencode --help` once per run and passes `--pure` only when it is listed; if that check fails it keeps `--pure` and logs a warning. Set `OCTOPUS_OPENCODE_PURE=0` to drop the flag (or `1` to keep it) and skip the check. Values are case insensitive (`1/true/yes/on`, `0/false/no/off`). Details: `config/providers/opencode/CLAUDE.md`.
+
 **Ollama model missing, nothing downloads** — intentional. Auto-pull is fail-closed to prevent unbounded multi-GB downloads. Pull explicitly (`ollama pull <model>`) or allow it with `OCTOPUS_OLLAMA_ALLOW_PULL=true` (capped by `OCTOPUS_OLLAMA_MAX_PULL_GB`, default 20).
 
 **A provider is installed but you want it out of the roster** — `/octo:model-config disable <provider> --session` removes it from detection and fanout for the current session; `clear-allowlist --session` restores defaults.
