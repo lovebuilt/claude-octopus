@@ -455,7 +455,6 @@ SUPPORTS_MCP_ELICITATION=false        # v8.57: Claude Code v2.1.76+ (MCP servers
 SUPPORTS_WORKTREE_SPARSE_PATHS=false  # v8.57: Claude Code v2.1.76+ (worktree.sparsePaths setting for sparse checkout in --worktree mode)
 SUPPORTS_EFFORT_COMMAND=false         # v8.57: Claude Code v2.1.76+ (/effort slash command to set model effort level during session)
 SUPPORTS_EFFORT_CLI_FLAG=false        # Spawned Claude CLI exposes --effort in --help
-SUPPORTS_OPENCODE_PURE_FLAG=unknown   # OpenCode CLI declares the global --pure flag (true/false/unknown; 2.x rejects it)
 SUPPORTS_BG_PARTIAL_RESULTS=false     # v8.57: Claude Code v2.1.76+ (killing background agent preserves partial results in conversation context)
 SUPPORTS_ALLOW_READ_SANDBOX=false     # v9.5: Claude Code v2.1.77+ (allowRead sandbox filesystem setting restricts Read tool path access)
 SUPPORTS_COPY_INDEX=false             # v9.5: Claude Code v2.1.77+ (/copy N copies Nth response from conversation history)
@@ -2327,10 +2326,6 @@ fi
 if [[ "$OCTOPUS_ARTIFACT_READ_ONLY" != "true" ]]; then
     # Detect Claude Code version for v2.1.12+ features (v7.12.0)
     detect_claude_code_version 2>/dev/null || true
-
-    # OpenCode 1.x needs --pure, 2.x rejects it. Probe once per run; stderr is
-    # kept so a failed probe's WARN (naming OCTOPUS_OPENCODE_PURE) is visible.
-    detect_opencode_capabilities || true
 
     # Validate Claude Code task integration features (v7.16.0)
     validate_claude_code_task_features 2>/dev/null || true

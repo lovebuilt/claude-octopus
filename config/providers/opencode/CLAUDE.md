@@ -81,27 +81,21 @@ opencode run -m provider/model "<prompt>"          # OpenCode 2.x
 
 ### The `--pure` flag (OpenCode 1.x vs 2.x)
 
-OpenCode 1.x takes the global `--pure` flag, which skips the external-plugin
-auto-title path that could hang `opencode run` (Issue #566). OpenCode 2.x
-removed the flag and rejects it (`Unrecognized flag: --pure`).
+OpenCode 1.x needs the global `--pure` flag to avoid the plugin auto-title hang
+(Issue #566); OpenCode 2.x rejects it (`Unrecognized flag: --pure`). The first
+time Octopus builds an OpenCode command it reads `opencode --help` (bounded by
+`OCTOPUS_BARE_PROBE_TIMEOUT`, stdin closed) and passes `--pure` only when the
+help declares it. Nothing is probed at startup. The verdict is cached in the
+workspace (`.opencode-capabilities`) per binary path, size and mtime, so an
+upgrade is checked again. If the check fails, its output is not help, or
+`OCTOPUS_SKIP_PROVIDER_PROBES=true` (the default in remote sessions), Octopus
+keeps `--pure` and warns once per run. `OCTOPUS_OPENCODE_PURE` decides without a
+check, any case: `1/true/yes/on` or `0/false/no/off` (set `0` for 2.x when
+probes are skipped).
 
-At startup Octopus reads `opencode --help` once per run (bounded by
-`OCTOPUS_BARE_PROBE_TIMEOUT`, default 5s, stdin closed) and passes `--pure`
-only when the help declares it. If the probe fails (non-zero exit, no output or
-timeout) Octopus keeps passing `--pure` and logs a warning.
-
-`OCTOPUS_OPENCODE_PURE` skips the probe and decides directly. Values are case
-insensitive: `1`, `true`, `yes`, `on` pass `--pure`; `0`, `false`, `no`, `off`
-omit it. Any other value is ignored with a warning and the probe runs.
-
-The probe is not skipped by `OCTOPUS_SKIP_PROVIDER_PROBES` (on by default in
-remote sessions): it reads local help text only, and without it every dispatch
-on OpenCode 2.x would fail. Set `OCTOPUS_OPENCODE_PURE` to avoid it.
-
-Known limits: OpenCode 2.x runs requests through a background server by
-default, so a client-side timeout may not stop work already running on that
-server. The Issue #566 hang has not been reproduced on 2.x without `--pure`,
-but it has not been proven absent either.
+Known limits: 2.x runs requests through a background server by default, so a
+client-side timeout may not stop work on that server; the Issue #566 hang is
+not reproduced on 2.x without `--pure` but not proven absent.
 
 ## Role Assignment
 

@@ -2,7 +2,7 @@
 # Claude Octopus — Provider Detection & Version Checking
 # ═══════════════════════════════════════════════════════════════════════════════
 # Extracted from orchestrate.sh in v9.7.7 monolith decomposition.
-# Contains: version_compare, detect_claude_code_version, detect_opencode_capabilities,
+# Contains: version_compare, detect_claude_code_version, octo_opencode_pure_flag_support,
 #           detect_enterprise_backend, detect_fast_mode, check_provider_health,
 #           check_all_providers
 # Source-safe: no main execution block.
@@ -694,33 +694,26 @@ detect_claude_code_version() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# OPENCODE CAPABILITY DETECTION
+# OPENCODE --pure CAPABILITY (lazy, cached per binary)
 # OpenCode 1.x takes the global --pure flag, which skips the external-plugin
 # auto-title path behind the Issue #566 hang. OpenCode 2.x removed the flag and
 # rejects it ("Unrecognized flag: --pure"), so every dispatch fails if it is
-# passed. Probe the installed CLI's help once per run so dispatch never guesses.
+# passed. get_agent_command asks octo_opencode_pure_flag_support only when it
+# builds an OpenCode command; nothing probes at startup.
 #
-# SUPPORTS_OPENCODE_PURE_FLAG is one of:
-#   true     --help declares --pure (or OCTOPUS_OPENCODE_PURE forces it on)
-#   false    --help succeeded without declaring it (or the override forces off)
-#   unknown  not probed (OpenCode absent) or the probe failed; dispatch keeps
-#            passing --pure, the behaviour before this probe existed
+# The answer is one of:
+#   true     help declares --pure (or OCTOPUS_OPENCODE_PURE forces it on)
+#   false    the output is help and does not declare it (or the override is off)
+#   unknown  OpenCode absent, probes skipped, or the probe failed; dispatch keeps
+#            passing --pure, the behaviour before this check existed
+#
+# Dispatch runs in command-substitution subshells, so the verdict is cached in
+# the workspace, keyed by the resolved binary path plus its size and mtime: an
+# upgrade changes the key and the next dispatch probes again. A failed probe is
+# cached for the current run only, so the next run retries.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Print true/false for a recognised OCTOPUS_OPENCODE_PURE value (case
-# insensitive). Returns 1 when unset, 2 when set to something unrecognised.
-_octo_opencode_pure_override() {
-    local value
-    [[ -n "${OCTOPUS_OPENCODE_PURE:-}" ]] || return 1
-    value="$(printf '%s' "$OCTOPUS_OPENCODE_PURE" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    case "$value" in
-        1|true|yes|on) printf '%s\n' true ;;
-        0|false|no|off) printf '%s\n' false ;;
-        *) return 2 ;;
-    esac
-}
-
-_octo_opencode_capability_warn() {
+_octo_opencode_warn() {
     if declare -f log >/dev/null 2>&1; then
         log WARN "$*"
     else
@@ -728,47 +721,161 @@ _octo_opencode_capability_warn() {
     fi
 }
 
-detect_opencode_capabilities() {
-    SUPPORTS_OPENCODE_PURE_FLAG=unknown
+# Identifies the current run (the run contract's id, which follows the Claude
+# session when there is one) for once-per-run records.
+_octo_opencode_run_key() {
+    if declare -f octo_run_contract_id >/dev/null 2>&1; then
+        octo_run_contract_id
+    else
+        printf 'pid-%s\n' "$$"
+    fi
+}
 
-    local override="" override_rc=0
+_octo_opencode_cache_file() {
+    [[ -n "${WORKSPACE_DIR:-}" ]] || return 1
+    printf '%s/.opencode-capabilities\n' "$WORKSPACE_DIR"
+}
+
+# Print "size:mtime" of the file a path resolves to. GNU form first: on Linux
+# `stat -f` means --file-system and succeeds with unrelated output.
+_octo_opencode_binary_signature() {
+    local sig="" sig_re='^[0-9]+:[0-9]+$'
+    sig="$(stat -L -c '%s:%Y' "$1" 2>/dev/null)" || sig=""
+    [[ "$sig" =~ $sig_re ]] || sig="$(stat -L -f '%z:%m' "$1" 2>/dev/null)" || sig=""
+    [[ "$sig" =~ $sig_re ]] || return 1
+    printf '%s\n' "$sig"
+}
+
+# Emit a WARN once per run and key. Without a workspace it warns every time.
+_octo_opencode_warn_once() {
+    local kind="$1" key="$2" marker="" seen=""
+    shift 2
+    if marker="$(_octo_opencode_cache_file)"; then
+        marker="${marker}.warned-${kind}"
+        { IFS= read -r seen < "$marker"; } 2>/dev/null || true
+        [[ "$seen" == "$key" ]] && return 0
+        { printf '%s\n' "$key" > "$marker"; } 2>/dev/null || true
+    fi
+    _octo_opencode_warn "$*"
+    return 0
+}
+
+# Print true/false for a recognised OCTOPUS_OPENCODE_PURE value, in any case,
+# with no external tools. Returns 1 when unset, 2 when unrecognised.
+_octo_opencode_pure_override() {
+    case "${OCTOPUS_OPENCODE_PURE:-}" in
+        '') return 1 ;;
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) printf '%s\n' true ;;
+        0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]) printf '%s\n' false ;;
+        *) return 2 ;;
+    esac
+}
+
+# Classify captured help output. true: a line declares --pure ("  --pure ...",
+# "  -p, --pure ...", "  --pure, -p ..."). false: the output looks like help
+# (an Options/FLAGS heading and at least one option line) without declaring it.
+# unknown: anything else, so an error banner never reads as "unsupported".
+# Colour codes and carriage returns are stripped first.
+_octo_opencode_classify_help() {
+    local line pre rest seq esc=$'\033' has_heading=false has_option=false
+    local declare_re='^[[:space:]]*(-[[:alnum:]],[[:space:]]*)?--pure([[:space:],=]|$)'
+    local option_re='^[[:space:]]*(-[[:alnum:]],[[:space:]]*)?--[[:alnum:]]'
+    local heading_re='^[[:space:]]*([[:alpha:]]+[[:space:]]+)?([Oo][Pp][Tt][Ii][Oo][Nn][Ss]|[Ff][Ll][Aa][Gg][Ss])[[:space:]]*:?[[:space:]]*$'
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line//$'\r'/}"
+        while [[ "$line" == *"${esc}["* ]]; do
+            pre="${line%%"${esc}["*}"
+            rest="${line#*"${esc}["}"
+            seq="${rest%%m*}"
+            [[ "$rest" == *m* && "$seq" != *[!0-9\;]* ]] || break
+            line="${pre}${rest#*m}"
+        done
+        if [[ "$line" =~ $declare_re ]]; then
+            printf '%s\n' true
+            return 0
+        fi
+        if [[ "$line" =~ $heading_re ]]; then has_heading=true; fi
+        if [[ "$line" =~ $option_re ]]; then has_option=true; fi
+    done <<< "$1"
+    if [[ "$has_heading" == "true" && "$has_option" == "true" ]]; then
+        printf '%s\n' false
+    else
+        printf '%s\n' unknown
+    fi
+    return 0
+}
+
+# Print true, false or unknown for the opencode on PATH. See the block above.
+octo_opencode_pure_flag_support() {
+    local override="" override_rc=0 run_key
     override="$(_octo_opencode_pure_override)" || override_rc=$?
     if [[ "$override_rc" -eq 0 ]]; then
-        SUPPORTS_OPENCODE_PURE_FLAG="$override"
+        printf '%s\n' "$override"
         return 0
     fi
+    run_key="$(_octo_opencode_run_key)"
     if [[ "$override_rc" -eq 2 ]]; then
-        _octo_opencode_capability_warn "OCTOPUS_OPENCODE_PURE='${OCTOPUS_OPENCODE_PURE}' is not recognised (use 1/true/yes/on or 0/false/no/off); probing opencode --help instead"
+        _octo_opencode_warn_once override "${run_key}:${OCTOPUS_OPENCODE_PURE}" \
+            "OCTOPUS_OPENCODE_PURE='${OCTOPUS_OPENCODE_PURE}' is not recognised (use 1/true/yes/on or 0/false/no/off); ignoring it"
     fi
 
-    command -v opencode >/dev/null 2>&1 || return 0
+    local binary=""
+    binary="$(command -v opencode 2>/dev/null)" || binary=""
+    if [[ "$binary" != /* ]]; then
+        printf '%s\n' unknown
+        return 0
+    fi
 
-    # Deliberately not gated by OCTOPUS_SKIP_PROVIDER_PROBES (default on in
-    # remote sessions). That switch suppresses auth and model probes; this one
-    # only reads local help text inside the bounded runner, and skipping it
-    # would leave OpenCode 2.x failing every dispatch. OCTOPUS_OPENCODE_PURE
-    # is the way to skip it.
-    local probe_total probe_term probe_grace help_text="" probe_rc=0
+    if [[ "${OCTOPUS_SKIP_PROVIDER_PROBES:-false}" == "true" ]]; then
+        _octo_opencode_warn_once skip "$run_key" \
+            "OCTOPUS_SKIP_PROVIDER_PROBES=true, so opencode --help is not checked and OpenCode dispatches keep --pure. OpenCode 2.x rejects --pure: set OCTOPUS_OPENCODE_PURE=0 for 2.x (or 1 to keep --pure without this warning)"
+        printf '%s\n' unknown
+        return 0
+    fi
+
+    local sig="" cache="" c_kind="" c_path="" c_sig="" c_verdict="" c_run=""
+    sig="$(_octo_opencode_binary_signature "$binary")" || sig=""
+    if [[ -n "$sig" ]] && cache="$(_octo_opencode_cache_file)"; then
+        { IFS=$'\t' read -r c_kind c_path c_sig c_verdict c_run < "$cache"; } 2>/dev/null || true
+        if [[ "$c_kind" == "pure" && "$c_path" == "$binary" && "$c_sig" == "$sig" ]]; then
+            case "$c_verdict" in
+                true|false)
+                    printf '%s\n' "$c_verdict"
+                    return 0
+                    ;;
+                unknown)
+                    if [[ "$c_run" == "$run_key" ]]; then
+                        printf '%s\n' unknown
+                        return 0
+                    fi
+                    ;;
+            esac
+        fi
+    else
+        cache=""
+    fi
+
+    local probe_total="" probe_term="" probe_grace="" help_text="" probe_rc=0 verdict=unknown
     read -r probe_total probe_term probe_grace <<< \
         "$(_octo_bare_probe_budget "${OCTOPUS_BARE_PROBE_TIMEOUT:-5}" 2>/dev/null)"
     # OpenCode 1.x prints its help on stderr, 2.x on stdout: capture both.
     help_text="$(_octo_run_bare_probe_with_timeout \
         "${probe_total:-5}" "${probe_term:-3}" "${probe_grace:-2}" \
-        opencode --help </dev/null 2>&1)" || probe_rc=$?
-    help_text="${help_text//$'\r'/}"
-
-    if [[ "$probe_rc" -ne 0 || -z "$help_text" ]]; then
-        _octo_opencode_capability_warn "opencode --help probe failed (exit ${probe_rc}); keeping --pure on OpenCode dispatches. OpenCode 2.x rejects --pure: set OCTOPUS_OPENCODE_PURE=0 to drop it, or OCTOPUS_OPENCODE_PURE=1 to keep it without probing"
-        return 0
+        "$binary" --help </dev/null 2>&1)" || probe_rc=$?
+    if [[ "$probe_rc" -eq 0 ]]; then
+        verdict="$(_octo_opencode_classify_help "$help_text")"
     fi
 
-    # Match an option declaration line ("  --pure  ..." or "  -p, --pure"),
-    # never a mention of the word elsewhere in the help text.
-    if grep -Eq -- '^[[:space:]]*(-[[:alnum:]],[[:space:]]*)?--pure([[:space:],=]|$)' <<< "$help_text"; then
-        SUPPORTS_OPENCODE_PURE_FLAG=true
-    else
-        SUPPORTS_OPENCODE_PURE_FLAG=false
+    if [[ "$verdict" == "unknown" ]]; then
+        _octo_opencode_warn "opencode --help check failed (exit ${probe_rc}, or the output was not help); keeping --pure on OpenCode dispatches this run. OpenCode 2.x rejects --pure: set OCTOPUS_OPENCODE_PURE=0 to drop it, or OCTOPUS_OPENCODE_PURE=1 to keep it without the check"
     fi
+    if [[ -n "$cache" ]]; then
+        local tmp="${cache}.tmp.$$.${RANDOM:-0}"
+        if { printf 'pure\t%s\t%s\t%s\t%s\n' "$binary" "$sig" "$verdict" "$run_key" > "$tmp"; } 2>/dev/null; then
+            mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+        fi
+    fi
+    printf '%s\n' "$verdict"
     return 0
 }
 

@@ -846,11 +846,16 @@ get_agent_command() {
             # there hangs `opencode run` indefinitely with no timeout or error
             # (Issue #566). It's a global flag, so it must precede the `run`
             # subcommand or risk being ignored/rejected. OpenCode 2.x removed
-            # it and rejects it ("Unrecognized flag: --pure"). Capability
-            # detection (detect_opencode_capabilities in providers.sh) probes
-            # the installed CLI once per run; only a definite "false" drops the
-            # flag, so an unprobed or failed probe keeps the Issue #566 guard.
-            if [[ "${SUPPORTS_OPENCODE_PURE_FLAG:-unknown}" == "false" ]]; then
+            # it and rejects it ("Unrecognized flag: --pure"). The check runs
+            # here, only when an OpenCode command is built, and is cached per
+            # binary (octo_opencode_pure_flag_support in providers.sh). Only a
+            # definite "false" drops the flag, so a skipped or failed check
+            # keeps the Issue #566 guard.
+            local oc_pure=unknown
+            if declare -f octo_opencode_pure_flag_support >/dev/null 2>&1; then
+                oc_pure="$(octo_opencode_pure_flag_support)" || oc_pure=unknown
+            fi
+            if [[ "$oc_pure" == "false" ]]; then
                 echo "opencode run ${oc_model_flag}"
             else
                 echo "opencode --pure run ${oc_model_flag}"

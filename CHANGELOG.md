@@ -5,11 +5,13 @@
 ### Fixed
 
 - OpenCode 2.x dispatches no longer fail with "Unrecognized flag: --pure".
-  Octopus reads `opencode --help` once per run, bounded and with stdin closed,
-  and passes the 1.x `--pure` flag only when the help declares it. A failed
-  check keeps `--pure`, as before, and logs a warning.
-  `OCTOPUS_OPENCODE_PURE` (`1/true/yes/on` or `0/false/no/off`, any case)
-  skips the check.
+  When Octopus builds an OpenCode command it reads `opencode --help` (bounded,
+  stdin closed) and passes the 1.x `--pure` flag only when the help declares it.
+  Nothing runs at startup; the verdict is cached in the workspace per binary
+  path, size and mtime. A failed check, output that is not help, or
+  `OCTOPUS_SKIP_PROVIDER_PROBES=true` keeps `--pure`, as before, with one
+  warning per run. `OCTOPUS_OPENCODE_PURE` (`1/true/yes/on` or
+  `0/false/no/off`, any case) decides without a check.
 
 ## [11.10.0] - 2026-10-02
 
