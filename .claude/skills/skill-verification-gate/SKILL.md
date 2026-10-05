@@ -88,11 +88,15 @@ In Claude Octopus workflows, verification is especially critical because:
 
 After any multi-provider workflow:
 ```bash
-# Verify synthesis file exists and is recent
-ls -la ~/.claude-octopus/results/*-synthesis-*.md | tail -1
+# Verify the newest phase document exists and is recent. Each phase writes its own:
+# probe-synthesis-*.md (discover), grasp-consensus-*.md (define),
+# tangle-validation-*.md (develop), delivery-*.md (deliver).
+RESULT_FILE=$(find ~/.claude-octopus/results -type f \( -name "probe-synthesis-*.md" -o -name "grasp-consensus-*.md" \
+  -o -name "tangle-validation-*.md" -o -name "delivery-*.md" \) -exec ls -t {} + 2>/dev/null | head -n1)
+ls -la "$RESULT_FILE"
 
 # Verify it has content (not just headers)
-wc -l ~/.claude-octopus/results/*-synthesis-*.md | tail -1
+wc -l < "$RESULT_FILE"
 ```
 
 ## When to Apply

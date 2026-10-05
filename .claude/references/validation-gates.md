@@ -156,31 +156,38 @@ You are EXPLICITLY PROHIBITED from:
 
 ## Validation Gate Types
 
-Different workflows produce different artifacts:
+Different workflows produce different artifacts. These lookups search the whole results
+directory and take the newest match, so with several sessions running at once they can
+pick another run's file; orchestrate.sh also logs each path (`Synthesis complete:`,
+`Consensus document:`, `Validation complete:`, `Delivery document:`).
 
 ### Research Workflows (probe, research)
 ```bash
-SYNTHESIS_FILE=$(find ~/.claude-octopus/results -name "probe-synthesis-*.md" -mmin -10 2>/dev/null | head -n1)
+SYNTHESIS_FILE=$(find ~/.claude-octopus/results -type f -name "probe-synthesis-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 ```
 
 ### Definition Workflows (grasp, define)
 ```bash
-SYNTHESIS_FILE=$(find ~/.claude-octopus/results -name "grasp-synthesis-*.md" -mmin -10 2>/dev/null | head -n1)
+SYNTHESIS_FILE=$(find ~/.claude-octopus/results -type f -name "grasp-consensus-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 ```
 
 ### Implementation Workflows (tangle, develop)
 ```bash
-SYNTHESIS_FILE=$(find ~/.claude-octopus/results -name "tangle-synthesis-*.md" -mmin -10 2>/dev/null | head -n1)
+VALIDATION_FILE=$(find ~/.claude-octopus/results -type f -name "tangle-validation-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 ```
+The report exists even when the gate fails: read `### Quality Gate:` and pass only
+`PASSED`, `WARNING` or `CHALLENGED`; `FAILED`, a missing or an unknown status fails.
 
 ### Validation Workflows (ink, deliver)
 ```bash
-VALIDATION_FILE=$(find ~/.claude-octopus/results -name "ink-validation-*.md" -mmin -10 2>/dev/null | head -n1)
+VALIDATION_FILE=$(find ~/.claude-octopus/results -type f -name "delivery-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 ```
+The document exists even when pre-delivery checks fail: read `## Status:` and pass only
+`COMPLETE`; `PARTIAL - Review Required`, a missing or an unknown status fails.
 
 ### Debate Workflows
 ```bash
-DEBATE_FILE=$(find ~/.claude-octopus/results -name "debate-*.md" -mmin -10 2>/dev/null | head -n1)
+DEBATE_FILE=$(find ~/.claude-octopus/results -type f -name "grapple-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 ```
 
 ### Code Review Workflows

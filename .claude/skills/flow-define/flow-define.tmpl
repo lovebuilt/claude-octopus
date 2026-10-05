@@ -264,11 +264,14 @@ These spinner verb updates happen automatically - orchestrate.sh calls `update_t
 **After orchestrate.sh completes, verify it succeeded:**
 
 ```bash
-# Find the latest synthesis file (created within last 10 minutes)
-SYNTHESIS_FILE=$(find ~/.claude-octopus/results -name "grasp-synthesis-*.md" -mmin -10 2>/dev/null | head -n1)
+# Find the newest consensus document written in the last 10 minutes. This searches the
+# whole results directory, as earlier releases did: with several sessions or projects
+# running at once it can pick another run's file, so when orchestrate.sh logged a
+# "Consensus document:" path, check that it names this file.
+SYNTHESIS_FILE=$(find ~/.claude-octopus/results -type f -name "grasp-consensus-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 
-if [[ -z "$SYNTHESIS_FILE" ]]; then
-  echo "❌ VALIDATION FAILED: No synthesis file found"
+if [[ ! -s "$SYNTHESIS_FILE" ]]; then
+  echo "❌ VALIDATION FAILED: No consensus document found"
   echo "orchestrate.sh did not execute properly"
   exit 1
 fi
@@ -451,7 +454,7 @@ The orchestrate.sh script will:
 
 Results are saved to:
 ```
-~/.claude-octopus/results/${SESSION_ID}/grasp-synthesis-<timestamp>.md
+~/.claude-octopus/results/${SESSION_ID}/grasp-consensus-<timestamp>.md
 ```
 
 ### Step 4: Present Problem Definition
@@ -655,7 +658,7 @@ Claude:
 
 Ready to proceed to implementation?
 
-Full problem definition saved to: ~/.claude-octopus/results/abc-123/grasp-synthesis-20250118-144530.md
+Full problem definition saved to: ~/.claude-octopus/results/abc-123/grasp-consensus-20250118-144530.md
 ```
 
 ### Example 2: Clarify Feature Scope

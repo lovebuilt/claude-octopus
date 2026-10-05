@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The Define, Develop, Deliver and Ship result gates looked for
+  `grasp-synthesis-`, `tangle-synthesis-` and `ink-validation-` reports, which
+  the engine does not write, so they could never find their file. They now look
+  for `grasp-consensus-`, `tangle-validation-` and `delivery-`, and take the
+  newest fresh match instead of the first one `find` lists. The verification
+  skill, the validation-gates reference, Discover's results note
+  (`probe-synthesis-`) and the phase help text name the same files.
+- A report existing is no longer a pass. Develop passes only a `PASSED`,
+  `WARNING` or `CHALLENGED` quality gate (the last two with a review note);
+  Deliver and Ship pass only `## Status: COMPLETE`. `FAILED`,
+  `PARTIAL - Review Required`, a missing status or an unknown status fails
+  the gate.
+- The lookups still search the whole results directory, as before, so with
+  several sessions running at once a gate can pick another run's report.
+
 ## [11.10.0] - 2026-10-02
 
 ### Added

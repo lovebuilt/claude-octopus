@@ -148,13 +148,26 @@ command -v agy &> /dev/null && agy_status="Available" || agy_status="Not install
 #### Step 3: Verify Audit Completed
 
 ```bash
-# Find the latest validation file
-VALIDATION_FILE=$(find ~/.claude-octopus/results -name "ink-validation-*.md" -mmin -10 2>/dev/null | head -n1)
+# Find the newest delivery document written in the last 10 minutes. This searches the
+# whole results directory, as earlier releases did: with several sessions or projects
+# running at once it can pick another run's file, so when orchestrate.sh logged a
+# "Delivery document:" path, check that it names this file.
+VALIDATION_FILE=$(find ~/.claude-octopus/results -type f -name "delivery-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 
-if [[ -z "$VALIDATION_FILE" ]]; then
-    echo "AUDIT FAILED: No validation file found"
+if [[ ! -s "$VALIDATION_FILE" ]]; then
+    echo "AUDIT FAILED: No delivery document found"
     exit 1
 fi
+
+# ink writes the document even when its checks fail ("## Status: PARTIAL - Review Required").
+# Only COMPLETE passes; a missing or unknown status fails.
+delivery_status=$(awk '/^## Status: /{ sub(/^## Status: /, ""); print; exit }' "$VALIDATION_FILE")
+case "$delivery_status" in
+    COMPLETE) ;;
+    *)
+        echo "AUDIT FAILED: delivery status '${delivery_status:-missing}' is not COMPLETE ($VALIDATION_FILE)"
+        exit 1 ;;
+esac
 
 echo "AUDIT COMPLETE: $VALIDATION_FILE"
 ```

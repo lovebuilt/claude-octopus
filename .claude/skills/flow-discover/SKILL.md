@@ -587,7 +587,7 @@ background_task(agent="librarian", prompt="Research external documentation for [
 
 Results are saved to:
 ```
-~/.claude-octopus/results/${SESSION_ID}/discover-synthesis-<timestamp>.md
+~/.claude-octopus/results/${SESSION_ID}/probe-synthesis-<timestamp>.md
 ```
 
 ### Step 4: Present Synthesis

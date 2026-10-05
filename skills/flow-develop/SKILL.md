@@ -260,17 +260,36 @@ These spinner verb updates happen automatically - orchestrate.sh calls `update_t
 **After orchestrate.sh completes, verify it succeeded:**
 
 ```bash
-# Find the latest synthesis file (created within last 10 minutes)
-SYNTHESIS_FILE=$(find ~/.claude-octopus/results -name "tangle-synthesis-*.md" -mmin -10 2>/dev/null | head -n1)
+# Find the newest validation report written in the last 10 minutes. This searches the
+# whole results directory, as earlier releases did: with several sessions or projects
+# running at once it can pick another run's file, so when orchestrate.sh logged a
+# "Validation complete:" path, check that it names this file.
+VALIDATION_FILE=$(find ~/.claude-octopus/results -type f -name "tangle-validation-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 
-if [[ -z "$SYNTHESIS_FILE" ]]; then
-  echo "❌ VALIDATION FAILED: No synthesis file found"
+if [[ ! -s "$VALIDATION_FILE" ]]; then
+  echo "❌ VALIDATION FAILED: No tangle validation report found"
   echo "orchestrate.sh did not execute properly"
   exit 1
 fi
 
-echo "✅ VALIDATION PASSED: $SYNTHESIS_FILE"
-cat "$SYNTHESIS_FILE"
+# The report is written even when the quality gate fails. Only a status the engine
+# treats as passing passes here; a missing or unknown status fails.
+gate_status=$(awk '/^### Quality Gate: /{ sub(/^### Quality Gate: /, ""); print; exit }' "$VALIDATION_FILE")
+case "$gate_status" in
+  PASSED) ;;
+  WARNING|CHALLENGED)
+    echo "⚠️ Quality gate $gate_status: review the concerns in the report before building on it." ;;
+  FAILED)
+    echo "❌ VALIDATION FAILED: the tangle quality gate FAILED ($VALIDATION_FILE)"
+    cat "$VALIDATION_FILE"
+    exit 1 ;;
+  *)
+    echo "❌ VALIDATION FAILED: quality gate status '${gate_status:-missing}' is not PASSED, WARNING or CHALLENGED ($VALIDATION_FILE)"
+    exit 1 ;;
+esac
+
+echo "✅ VALIDATION PASSED: $VALIDATION_FILE"
+cat "$VALIDATION_FILE"
 ```
 
 **If validation fails:**
@@ -282,11 +301,11 @@ cat "$SYNTHESIS_FILE"
 
 ### STEP 6: Update State (MANDATORY - Post-Execution)
 
-**After synthesis is verified, record implementation details in state:**
+**After the validation report is verified, record implementation details in state:**
 
 ```bash
 # Extract key implementation decisions from synthesis
-implementation_approach=$(head -50 "$SYNTHESIS_FILE" | grep -A 3 "## Implementation\|## Approach" | tail -3 | tr '\n' ' ')
+implementation_approach=$(head -50 "$VALIDATION_FILE" | grep -A 3 "## Implementation\|## Approach" | tail -3 | tr '\n' ' ')
 
 # Record implementation decisions
 decision_made=$(echo "$implementation_approach" | grep -o "implemented\|using [A-Za-z0-9 ]*\|chose to\|pattern:" | head -1)
@@ -312,7 +331,7 @@ fi
 
 ### STEP 7: Present Implementation Plan (Only After Steps 1-6 Complete)
 
-Read the synthesis file and present:
+Read the validation report and present:
 - Recommended approach
 - Implementation steps
 - Code overview from all available perspectives
@@ -325,7 +344,7 @@ Read the synthesis file and present:
 ```
 *Multi-AI Implementation powered by Claude Octopus*
 *Providers: available external providers + 🔵 Claude*
-*Full implementation plan: $SYNTHESIS_FILE*
+*Full implementation plan: $VALIDATION_FILE*
 ```
 
 
@@ -486,7 +505,7 @@ Note: The `Agent(resume: ...)` parameter was removed in CC v2.1.77. Always use `
 
 Results are saved to:
 ```
-~/.claude-octopus/results/${SESSION_ID}/tangle-synthesis-<timestamp>.md
+~/.claude-octopus/results/${SESSION_ID}/tangle-validation-<timestamp>.md
 ```
 
 ### Step 5: Implement Solution
@@ -501,7 +520,7 @@ When this skill is invoked, follow the EXECUTION CONTRACT above exactly. The con
 1. **Blocking Step 1**: Detect work context (Dev vs Knowledge)
 2. **Blocking Step 2**: Check providers, display visual indicators
 3. **Blocking Step 3**: Execute orchestrate.sh develop via native shell command tool
-4. **Blocking Step 4**: Verify synthesis file exists
+4. **Blocking Step 4**: Verify the validation report exists and its quality gate did not fail
 5. **Step 5**: Present implementation plan, get user confirmation
 6. **After confirmation**: Implement the solution using Write/Edit tools
 

@@ -214,14 +214,33 @@ These spinner verb updates happen automatically - orchestrate.sh calls `update_t
 **After orchestrate.sh completes, verify it succeeded:**
 
 ```bash
-# Find the latest validation file (created within last 10 minutes)
-VALIDATION_FILE=$(find ~/.claude-octopus/results -name "ink-validation-*.md" -mmin -10 2>/dev/null | head -n1)
+# Find the newest delivery document written in the last 10 minutes. This searches the
+# whole results directory, as earlier releases did: with several sessions or projects
+# running at once it can pick another run's file, so when orchestrate.sh logged a
+# "Delivery document:" path, check that it names this file.
+VALIDATION_FILE=$(find ~/.claude-octopus/results -type f -name "delivery-*.md" -mmin -10 -exec ls -t {} + 2>/dev/null | head -n1)
 
-if [[ -z "$VALIDATION_FILE" ]]; then
-  echo "❌ VALIDATION FAILED: No validation file found"
+if [[ ! -s "$VALIDATION_FILE" ]]; then
+  echo "❌ VALIDATION FAILED: No delivery document found"
   echo "orchestrate.sh did not execute properly"
   exit 1
 fi
+
+# ink writes the document even when its pre-delivery checks fail, with
+# "## Status: PARTIAL - Review Required". Only COMPLETE passes this gate; a missing
+# or unknown status fails.
+delivery_status=$(awk '/^## Status: /{ sub(/^## Status: /, ""); print; exit }' "$VALIDATION_FILE")
+case "$delivery_status" in
+  COMPLETE) ;;
+  "PARTIAL - Review Required")
+    echo "❌ VALIDATION FAILED: delivery status is PARTIAL - Review Required ($VALIDATION_FILE)"
+    echo "Present these findings as unresolved; do not report the delivery as passed."
+    cat "$VALIDATION_FILE"
+    exit 1 ;;
+  *)
+    echo "❌ VALIDATION FAILED: delivery status '${delivery_status:-missing}' is not COMPLETE ($VALIDATION_FILE)"
+    exit 1 ;;
+esac
 
 echo "✅ VALIDATION PASSED: $VALIDATION_FILE"
 cat "$VALIDATION_FILE"
@@ -232,6 +251,9 @@ cat "$VALIDATION_FILE"
 2. Show logs from `~/.claude-octopus/logs/`
 3. DO NOT proceed with presenting results
 4. DO NOT substitute with direct review — fallback to single-model review defeats the adversarial multi-provider validation that catches blind spots
+
+If the delivery document exists but its status is not `COMPLETE`, present its findings as
+a partial delivery that needs review. Do not report it as passed and do not route to shipping.
 
 
 ### STEP 6: Update State (MANDATORY - Post-Execution)
@@ -477,7 +499,7 @@ The ink phase includes automatic quality validation via PostToolUse hook:
 
 Results are saved to:
 ```
-~/.claude-octopus/results/${SESSION_ID}/ink-validation-<timestamp>.md
+~/.claude-octopus/results/${SESSION_ID}/delivery-<timestamp>.md
 ```
 
 ### Step 5: Present Validation Report
@@ -715,7 +737,7 @@ const JWT_SECRET = 'my-secret-key-123'; // Should be process.env.JWT_SECRET
    - Implement "remember me" functionality
    - Add comprehensive logging and monitoring
 
-Full validation report saved to: ~/.claude-octopus/results/abc-123/ink-validation-20250118-145600.md
+Full validation report saved to: ~/.claude-octopus/results/abc-123/delivery-20250118-145600.md
 ```
 
 ### Example 2: Validate API Endpoints
