@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The Develop anti-sycophancy challenge now sees the change it is asked to
+  attack. It was given the first 3000 bytes of the raw result files, which on
+  a real run are the result header and the prompt preamble, so a clean
+  high-pass run was flagged as challenged. It now receives the diff against
+  the run's start commit, including deletions and new untracked files, and
+  the providers' framed output without stderr. Files the credential read
+  policy forbids and binary files are listed but not read. Budgets count
+  bytes and cut on line boundaries, the path list is capped, and the
+  evidence is wrapped as untrusted content.
+
 ## [11.10.0] - 2026-10-02
 
 ### Added
