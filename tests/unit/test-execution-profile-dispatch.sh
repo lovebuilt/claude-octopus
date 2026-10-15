@@ -89,4 +89,20 @@ JSON
 cmd=$(get_agent_command codex review code-reviewer)
 assert_contains "$cmd" 'model_reasoning_effort="high"'
 unset OCTOPUS_PROVIDERS_CONFIG
+# ultra is a Codex reasoning effort (GPT-6 Astra and Sol); other providers clamp it to their top level.
+export OCTOPUS_REASONING_POLICY=strict
+export OCTOPUS_CODEX_REASONING=ultra
+cmd=$(get_agent_command codex develop implementer)
+assert_contains "$cmd" 'model_reasoning_effort="ultra"'
+unset OCTOPUS_CODEX_REASONING
+export OCTOPUS_CLAUDE_REASONING=ultra
+cmd=$(get_agent_command claude-sonnet review code-reviewer)
+assert_contains "$cmd" "--effort max"
+assert_not_contains "$cmd" "--effort ultra"
+unset OCTOPUS_CLAUDE_REASONING
+export OCTOPUS_OPENAI_COMPATIBLE_AGENT_REASONING=ultra
+cmd=$(get_agent_command openai-compatible-agent develop implementer)
+assert_contains "$cmd" "--reasoning-effort high"
+unset OCTOPUS_OPENAI_COMPATIBLE_AGENT_REASONING
+unset OCTOPUS_REASONING_POLICY
 test_summary

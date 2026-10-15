@@ -281,7 +281,7 @@ octopus_normalize_reasoning_level() {
   case "${1:-}" in
     ""|default|auto) printf "%s\n" "" ;;
     none|off|disabled) printf "%s\n" "none" ;;
-    low|medium|high|max|xhigh) printf "%s\n" "$1" ;;
+    low|medium|high|max|xhigh|ultra) printf "%s\n" "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -327,11 +327,15 @@ octopus_reasoning_cli_fragment() {
   fi
   case "$provider" in
     codex) printf "%s\n" "-c model_reasoning_effort=\"${level}\"" ;;
-    claude|claude-sdk|anthropic-api) printf "%s\n" "--effort ${level}" ;;
+    claude|claude-sdk|anthropic-api)
+      # ultra is a Codex-only level (GPT-6 Astra and Sol); Claude effort stops at max.
+      case "$level" in ultra) level="max" ;; esac
+      printf "%s\n" "--effort ${level}" ;;
     openai-compatible-agent|openai-compatible|openai-tools)
       # The OpenAI reasoning_effort domain is low|medium|high; xhigh/max are
-      # Claude-side levels and would fail command validation downstream.
-      case "$level" in xhigh|max) level="high" ;; esac
+      # Claude-side levels and ultra is Codex-only; all would fail command
+      # validation downstream.
+      case "$level" in xhigh|max|ultra) level="high" ;; esac
       printf "%s\n" "--reasoning-effort ${level} --reasoning-policy ${policy}" ;;
   esac
 }
